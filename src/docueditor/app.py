@@ -33,6 +33,10 @@ def main(argv: list[str] | None = None) -> int:
     ):
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+    if "--version" in arguments:
+        print(f"{APP_NAME} {__version__}")
+        return 0
+
     app = QApplication(arguments)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
@@ -44,6 +48,9 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow()
     window.restore_window_state()
     window.show()
+    if "--self-test" in arguments:
+        app.processEvents()
+        return 0
 
     project_args = [arg for arg in arguments[1:] if not arg.startswith("-")]
     if project_args:

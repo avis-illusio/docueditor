@@ -27,3 +27,6 @@ htmlcov/
 # Local scratch / install caches
 .tmp/
 .pip-cache/
+
+# PyInstaller onefile work dir
+build-onefile/

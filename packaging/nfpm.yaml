@@ -1,0 +1,54 @@
+name: docueditor
+arch: amd64
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: editors
+priority: optional
+maintainer: avis-illusio <avis_illusio@outlook.com>
+description: |
+  WYSIWYG desktop editor for Docusaurus documentation.
+  Create, edit and reorder docs, edit front matter and site config,
+  and import Novelwriter or Yuque content in append mode.
+vendor: avis-illusio
+homepage: https://github.com/avis-illusio/docueditor
+license: GPL-3.0-only
+contents:
+  - src: dist/docueditor
+    dst: /opt/docueditor
+  - src: packaging/docueditor.sh
+    dst: /usr/bin/docueditor
+    file_info:
+      mode: 0755
+  - src: packaging/docueditor.desktop
+    dst: /usr/share/applications/docueditor.desktop
+  - src: packaging/icons/docueditor-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/docueditor.png
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libxkbcommon0
+      - libegl1
+      - libxcb-cursor0
+      - libxcb-icccm4
+      - libxcb-keysyms1
+      - libxcb-shape0
+  rpm:
+    depends:
+      - glibc
+      - libxkbcommon
+      - mesa-libEGL
+      - xcb-util-cursor
+      - xcb-util-wm
+      - xcb-util-keysyms
+      - xcb-util
+  archlinux:
+    depends:
+      - glibc
+      - libxkbcommon
+      - mesa
+      - xcb-util-cursor
+      - xcb-util-wm
+      - xcb-util-keysyms
+      - xcb-util

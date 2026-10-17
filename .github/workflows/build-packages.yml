@@ -1,0 +1,169 @@
+name: Build release packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: Read version
+        run: |
+          VERSION=$(python3 -c 'import sys; sys.path.insert(0, "src"); import docueditor; print(docueditor.__version__)')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Docueditor $VERSION"
+
+  linux:
+    needs: meta
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-keysyms1 libxcb-shape0 libfuse2 file
+          python -m pip install --upgrade pip
+          pip install "PySide6-Essentials>=6.5" pyinstaller
+          pip install -e . --no-deps
+      - name: Build Linux artifacts
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: bash packaging/build_linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/docueditor-*-x86_64
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "PySide6-Essentials>=6.5" pyinstaller
+          pip install -e . --no-deps
+      - name: Build Windows executable
+        shell: pwsh
+        run: |
+          $env:DOCUEDITOR_ONEFILE = "1"
+          $env:DOCUEDITOR_NAME = "Docueditor"
+          pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/docueditor.spec
+          $version = "${{ needs.meta.outputs.version }}"
+          Move-Item dist/Docueditor.exe "dist/Docueditor-$version-windows-x86_64.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    needs: meta
+    runs-on: macos-14
+    env:
+      ARCH: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "PySide6-Essentials>=6.5" pyinstaller
+          pip install -e . --no-deps
+      - name: Build macOS disk image
+        env:
+          DOCUEDITOR_ONEFILE: "0"
+          DOCUEDITOR_NAME: "Docueditor"
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/docueditor.spec
+          codesign --deep --force --sign - dist/Docueditor.app || true
+          hdiutil create -volname "Docueditor" -srcfolder dist/Docueditor.app -ov -format UDZO \
+            "dist/Docueditor-${VERSION}-macOS-${ARCH}.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [meta, linux, windows, macos]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List artifacts
+        run: ls -lh dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.meta.outputs.version }}
+          target_commitish: main
+          name: Docueditor v${{ needs.meta.outputs.version }}
+          make_latest: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*
+          body: |
+            ## 下载
+
+            | 平台 | 文件 |
+            | --- | --- |
+            | Windows | `Docueditor-${{ needs.meta.outputs.version }}-windows-x86_64.exe` |
+            | Linux（AppImage） | `docueditor-${{ needs.meta.outputs.version }}-x86_64.AppImage` |
+            | Linux（裸可执行） | `docueditor-${{ needs.meta.outputs.version }}-x86_64` |
+            | Debian / Ubuntu | `docueditor_${{ needs.meta.outputs.version }}_amd64.deb` |
+            | Fedora / RHEL | `docueditor-${{ needs.meta.outputs.version }}-1.x86_64.rpm` |
+            | Arch Linux | `docueditor-${{ needs.meta.outputs.version }}-1-x86_64.pkg.tar.zst` |
+            | macOS（Apple Silicon） | `Docueditor-${{ needs.meta.outputs.version }}-macOS-arm64.dmg` |
+
+            ### Linux
+
+            - AppImage：`chmod +x docueditor-*.AppImage && ./docueditor-*.AppImage`
+            - 裸可执行：`chmod +x docueditor-*-x86_64 && ./docueditor-*-x86_64`
+            - Debian/Ubuntu：`sudo apt install ./docueditor_*.deb`
+            - Fedora：`sudo dnf install ./docueditor-*.rpm`
+            - Arch：`sudo pacman -U ./docueditor-*.pkg.tar.zst`
+
+            ### macOS
+
+            安装包为 Apple Silicon（arm64），未签名/未公证。首次打开请右键 → 打开，或执行
+            `xattr -dr com.apple.quarantine /Applications/Docueditor.app`。
+            Intel Mac 请从源码安装（`pip install -e .`）。
+
+            ### Windows
+
+            直接运行 `Docueditor-*-windows-x86_64.exe`；SmartScreen 提示时选择“更多信息 → 仍要运行”。
+
+            > 这是一个 Vibe Coding 项目。重要文档请用 git 等版本控制兜底。

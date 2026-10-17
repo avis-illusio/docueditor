@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Docueditor
+GenericName=Docusaurus Documentation Editor
+Comment=WYSIWYG editor for Docusaurus documentation
+Exec=docueditor %F
+Icon=docueditor
+Terminal=false
+Categories=Development;TextEditor;Documentation;
+Keywords=docusaurus;markdown;mdx;documentation;editor;
+MimeType=text/markdown;text/x-markdown;
+StartupWMClass=Docueditor

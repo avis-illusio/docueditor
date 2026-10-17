@@ -41,6 +41,26 @@ Docusaurus 的 Markdown / MDX 文档时获得 **WYSIWYG（所见即所得）** �
 
 ## 安装
 
+### 预编译包（推荐）
+
+从 [Releases](https://github.com/avis-illusio/docueditor/releases) 下载对应平台的文件：
+
+| 平台 | 文件 | 使用 |
+| --- | --- | --- |
+| Windows | `Docueditor-<版本>-windows-x86_64.exe` | 双击运行 |
+| Linux（AppImage） | `docueditor-<版本>-x86_64.AppImage` | `chmod +x` 后运行 |
+| Linux（单文件） | `docueditor-<版本>-x86_64` | `chmod +x` 后运行 |
+| Debian / Ubuntu | `docueditor_<版本>_amd64.deb` | `sudo apt install ./docueditor_*.deb` |
+| Fedora / RHEL | `docueditor-<版本>-1.x86_64.rpm` | `sudo dnf install ./docueditor-*.rpm` |
+| Arch Linux | `docueditor-<版本>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./docueditor-*.pkg.tar.zst` |
+| macOS（Apple Silicon） | `Docueditor-<版本>-macOS-arm64.dmg` | 拖入「应用程序」 |
+
+- Linux 包依赖 `libxkbcommon`、`libEGL`、`xcb-util-cursor` 等，主流桌面环境已自带；
+- macOS 包为 Apple Silicon（arm64），未签名/未公证；首次打开请右键 → 打开，或执行 `xattr -dr com.apple.quarantine /Applications/Docueditor.app`。Intel Mac 请从源码安装；
+- Windows 触发 SmartScreen 时选择「更多信息 → 仍要运行」。
+
+### 从源码安装
+
 需要 Python 3.10 或更高版本。
 
 ```bash
@@ -154,6 +174,31 @@ GUI 冒烟测试在无显示环境下运行：
 QT_QPA_PLATFORM=offscreen pytest -q
 ```
 
+## 打包
+
+Linux 本地一键构建（需要 PyInstaller、curl；脚本会自动下载 appimagetool 与 nfpm）：
+
+```bash
+pip install pyinstaller
+bash packaging/build_linux.sh
+```
+
+产物：
+
+```
+dist/docueditor-<版本>-x86_64              # 单文件 ELF
+dist/docueditor-<版本>-x86_64.AppImage
+dist/docueditor_<版本>_amd64.deb
+dist/docueditor-<版本>-1.x86_64.rpm
+dist/docueditor-<版本>-1-x86_64.pkg.tar.zst
+```
+
+跨平台构建由 GitHub Actions 完成（`.github/workflows/build-packages.yml`）：
+推送 `v*` 标签或手动触发时，自动构建 Windows `.exe`、Linux 可执行文件/AppImage/deb/rpm/pkg.tar.zst、
+macOS arm64 `.dmg`，并附加到对应的 GitHub Release。
+
+打包配置位于 [`packaging/`](packaging/)：PyInstaller spec、desktop 文件、nfpm 配置与图标。
+
 ## 已知限制
 
 - 富文本编辑器基于 Qt 的 Markdown 支持；代码块与 Markdown 表格在富文本视图中显示为占位符（保存时原样写回），编辑它们请切换到源码模式；
@@ -168,6 +213,7 @@ QT_QPA_PLATFORM=offscreen pytest -q
 - [ ] 图片粘贴自动保存到 `static/img/` 并改写链接
 - [ ] 文档内链接与锚点检查
 - [ ] 导入 Notion / Obsidian
+- [x] 多平台安装包（Windows / Linux / macOS）
 - [ ] 多标签页编辑
 
 ## 许可证
