@@ -29,7 +29,7 @@ Docusaurus 的 Markdown / MDX 文档时获得 **WYSIWYG（所见即所得）** �
 | MDX 安全保护 | `import` / `export`、JSX 组件块、`:::` 指令、围栏代码块、Markdown 表格以占位符形式保留，保存时原样写回，不会被富文本转换吃掉 |
 | Front Matter 面板 | 可视化编辑 `title`、`id`、`sidebar_position`、`tags`、`draft` 等常用字段 |
 | 文件管理 | 新建、重命名、删除文档，自动维护唯一的文件名与侧边栏序号 |
-| 侧边栏排序 | 上移 / 下移直接改写 `sidebar_position`，所见即所得地调整文档顺序 |
+| 拖拽排序 | 像语雀一样直接拖动文档排序，自动重写 `sidebar_position`；支持拖入目录（跨目录移动） |
 | 项目配置 | 直接修改 `docusaurus.config.js` 中的 `title`、`tagline`、`url`、`baseUrl`、组织与项目名等字段（文本级安全改写，保留注释与格式） |
 | 导入 Novelwriter | 解析 `.nwd` 项目（`nwProject.nwx` + `content/`），按书目顺序与层级生成文档树 |
 | 导入语雀 | 支持语雀导出的 Markdown 文件夹 / ZIP / 单文件合集，转换表格、图片与语雀专有标签 |
@@ -95,7 +95,7 @@ python -m docueditor /path/to/docusaurus-site
 1. **打开项目**：`文件 → 打开 Docusaurus 项目`，选择包含 `docusaurus.config.js` 的目录。
 2. **编辑文档**：左侧文件树选择文档，中间区域直接编辑。工具栏提供标题、粗体、斜体、列表、引用、代码与链接。
 3. **保存**：`Ctrl+S`。Front Matter 与正文一起写回 `.md` / `.mdx`。
-4. **调整顺序**：右键文档 → `上移 / 下移`，或直接修改右侧面板的 `sidebar_position`。
+4. **调整顺序**：直接拖动文档到目标位置（同目录排序或拖进目录），`sidebar_position` 会自动重排；也可右键 `上移 / 下移` 或修改右侧面板的数字。
 5. **导入**：`文件 → 导入…`，选择 Novelwriter 或语雀，先看预览，再点“执行导入”。
 
 ## 导入说明

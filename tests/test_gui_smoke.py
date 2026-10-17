@@ -94,3 +94,54 @@ def test_main_window_create_document(qapp, project, monkeypatch):
     assert window.current_entry is not None
     assert "新文档标题" in window.current_entry.rel
     window.deleteLater()
+
+
+def test_drop_handler_moves_document(qapp, project):
+    window = MainWindow()
+    window._load_project(project)
+    entry = project.create_doc("second", title="Second")
+    window._refresh_after_change()
+    window.handle_drop_move(entry.rel, "", 0)
+    ordered = [item.title for item in project.entries]
+    assert ordered[0] == "Second"
+    assert window.current_entry is not None
+    window.deleteLater()
+
+
+def test_tree_drop_target_calculation(qapp, project):
+    from PySide6.QtWidgets import QAbstractItemView
+
+    from docueditor.widgets.file_tree import ROLE_TYPE
+
+    window = MainWindow()
+    window._load_project(project)
+    a = project.create_doc("a", title="A")
+    b = project.create_doc("b", title="B")
+    c = project.create_doc("c", title="C")
+    window._refresh_after_change()
+    tree = window.file_tree.tree
+
+    def item_for(rel):
+        window.file_tree.select(rel)
+        return tree.currentItem()
+
+    indicator = QAbstractItemView.DropIndicatorPosition
+    # Drag C above A -> index 1 (siblings are intro, a, b, c).
+    assert tree._drop_target(c.rel, item_for(a.rel), indicator.AboveItem) == ("", 1)
+    # Drag A below B -> [intro, b, a, c].
+    assert tree._drop_target(a.rel, item_for(b.rel), indicator.BelowItem) == ("", 2)
+    # Drop C onto a directory -> append inside it.
+    folder = project.create_doc("x", title="X", rel_dir="guide")
+    window._refresh_after_change()
+    dir_item = None
+    stack = [tree.invisibleRootItem()]
+    while stack:
+        item = stack.pop()
+        for index in range(item.childCount()):
+            child = item.child(index)
+            if child.data(0, ROLE_TYPE) == "dir":
+                dir_item = child
+            stack.append(child)
+    assert dir_item is not None
+    assert tree._drop_target(c.rel, dir_item, indicator.OnItem) == ("guide", 1)
+    window.deleteLater()

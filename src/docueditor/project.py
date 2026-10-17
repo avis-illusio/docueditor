@@ -268,6 +268,73 @@ class DocusaurusProject:
         self._entries = [item for item in self._entries if item.path != entry.path]
         return self._read_and_register(target)
 
+    @staticmethod
+    def _rel_dir(entry: DocEntry) -> str:
+        rel = Path(entry.rel).parent.as_posix()
+        return "" if rel in ("", ".") else rel
+
+    def move_document(self, entry: DocEntry, target_dir: str, index: int) -> DocEntry:
+        """Move *entry* into *target_dir* at *index* and renumber positions.
+
+        The tree passes ``index`` as a position in the target directory's
+        *current* list, which still contains the dragged document when the
+        move happens inside the same directory.  The index is adjusted here
+        after the source is removed.
+        """
+        if self.docs_dir is None:
+            raise ProjectError("项目尚未加载")
+        target_dir = target_dir.strip("/")
+        if target_dir:
+            directory = (self.docs_dir / target_dir).resolve()
+            if self.docs_dir not in directory.parents:
+                raise ProjectError("目标目录不在 docs 目录内")
+        source_dir = self._rel_dir(entry)
+        siblings = [
+            item
+            for item in self._entries
+            if self._rel_dir(item) == target_dir and item.path != entry.path
+        ]
+        if source_dir == target_dir:
+            current = [
+                item for item in self._entries if self._rel_dir(item) == source_dir
+            ]
+            try:
+                source_index = next(
+                    idx for idx, item in enumerate(current) if item.path == entry.path
+                )
+            except StopIteration:
+                source_index = len(current)
+            if source_index < index:
+                index -= 1
+        index = max(0, min(index, len(siblings)))
+
+        if source_dir != target_dir:
+            directory = self.docs_dir / target_dir if target_dir else self.docs_dir
+            directory.mkdir(parents=True, exist_ok=True)
+            new_path = directory / entry.path.name
+            if new_path.exists():
+                new_path = unique_path(directory, entry.path.stem, entry.path.suffix)
+            entry.path.rename(new_path)
+            entry = self._read_entry(new_path)
+
+        ordered = list(siblings)
+        ordered.insert(index, entry)
+        for position, item in enumerate(ordered, start=1):
+            if item.position != position:
+                self.save_doc(item, item.body, {"sidebar_position": position})
+
+        if source_dir != target_dir:
+            self.scan()
+            remaining = [
+                item for item in self._entries if self._rel_dir(item) == source_dir
+            ]
+            for position, item in enumerate(remaining, start=1):
+                if item.position != position:
+                    self.save_doc(item, item.body, {"sidebar_position": position})
+
+        self.scan()
+        return self.find(entry.path) or entry
+
     def set_position(self, entry: DocEntry, position: int | None) -> DocEntry:
         return self.save_doc(entry, entry.body, {"sidebar_position": position})
 

@@ -26,12 +26,98 @@ ROLE_REL = Qt.ItemDataRole.UserRole + 1
 ROLE_POSITION = Qt.ItemDataRole.UserRole + 2
 
 
+class _DocTree(QTreeWidget):
+    """Internal-move tree that reports drops instead of moving items itself."""
+
+    dropRequested = Signal(str, str, int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._entries: list[DocEntry] = []
+        self._drag_rel: str | None = None
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setAutoExpandDelay(350)
+
+    def set_entries_docs(self, entries: list[DocEntry]) -> None:
+        self._entries = list(entries)
+
+    @staticmethod
+    def _dir_of(rel: str) -> str:
+        parent = Path(rel).parent.as_posix()
+        return "" if parent in ("", ".") else parent
+
+    def startDrag(self, supported_actions: Qt.DropAction) -> None:  # noqa: N802
+        item = self.currentItem()
+        if item is not None and item.data(0, ROLE_TYPE) == "doc":
+            self._drag_rel = item.data(0, ROLE_REL)
+        else:
+            self._drag_rel = None
+        super().startDrag(supported_actions)
+        self._drag_rel = None
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        if event.source() is not self or self._drag_rel is None:
+            event.ignore()
+            return
+        target_item = self.itemAt(event.position().toPoint())
+        indicator = self.dropIndicatorPosition()
+        target = self._drop_target(self._drag_rel, target_item, indicator)
+        # Never let Qt move the item: the project model moves the file and
+        # renumbers sidebar_position, then the tree is rebuilt from disk.
+        event.ignore()
+        if target is not None:
+            self.dropRequested.emit(self._drag_rel, target[0], target[1])
+
+    def _drop_target(self, source_rel: str, target_item, indicator):
+        source_dir = self._dir_of(source_rel)
+        if target_item is None:
+            count = sum(1 for item in self._entries if self._dir_of(item.rel) == "")
+            return ("", count)
+        kind = target_item.data(0, ROLE_TYPE)
+        if kind == "dir":
+            if indicator == QAbstractItemView.DropIndicatorPosition.OnItem:
+                rel_dir = target_item.data(0, ROLE_REL)
+                count = sum(
+                    1 for item in self._entries if self._dir_of(item.rel) == rel_dir
+                )
+                return (rel_dir, count)
+            return None
+        target_rel = target_item.data(0, ROLE_REL)
+        if target_rel == source_rel:
+            return None
+        target_dir = self._dir_of(target_rel)
+        siblings = [
+            item.rel for item in self._entries if self._dir_of(item.rel) == target_dir
+        ]
+        try:
+            index = siblings.index(target_rel)
+        except ValueError:
+            return None
+        if indicator == QAbstractItemView.DropIndicatorPosition.BelowItem:
+            index += 1
+        elif indicator == QAbstractItemView.DropIndicatorPosition.OnItem:
+            index = len(siblings)
+        if source_dir == target_dir:
+            try:
+                source_index = siblings.index(source_rel)
+            except ValueError:
+                source_index = len(siblings)
+            if source_index < index:
+                index -= 1
+        return (target_dir, index)
+
+
 class FileTree(QWidget):
     documentActivated = Signal(str)
     newDocumentRequested = Signal(str)
     renameRequested = Signal(str)
     deleteRequested = Signal(str)
     moveRequested = Signal(str, int)
+    dropRequested = Signal(str, str, int)
     revealRequested = Signal(str)
     refreshRequested = Signal()
 
@@ -45,7 +131,7 @@ class FileTree(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._apply_filter)
 
-        self.tree = QTreeWidget()
+        self.tree = _DocTree()
         self.tree.setHeaderHidden(True)
         self.tree.setAnimated(True)
         self.tree.setIndentation(14)
@@ -54,6 +140,7 @@ class FileTree(QWidget):
         self.tree.customContextMenuRequested.connect(self._show_menu)
         self.tree.itemActivated.connect(self._activate)
         self.tree.itemClicked.connect(self._activate)
+        self.tree.dropRequested.connect(self.dropRequested)
 
         self.count_label = QLabel("0 篇文档")
         self.count_label.setObjectName("treeCount")
@@ -74,6 +161,7 @@ class FileTree(QWidget):
         expanded = self._expanded_paths()
         selected = self.selected_rel()
         self._entries = list(entries)
+        self.tree.set_entries_docs(entries)
         self.tree.clear()
         directories: dict[str, QTreeWidgetItem] = {}
         for entry in entries:
@@ -86,6 +174,7 @@ class FileTree(QWidget):
                     item = QTreeWidgetItem([part])
                     item.setData(0, ROLE_TYPE, "dir")
                     item.setData(0, ROLE_REL, key)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
                     item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
                     item.setForeground(0, QColor("#8a8f98"))
                     parent.addChild(item)
@@ -95,6 +184,7 @@ class FileTree(QWidget):
             item.setData(0, ROLE_TYPE, "doc")
             item.setData(0, ROLE_REL, entry.rel)
             item.setData(0, ROLE_POSITION, entry.position if entry.position is not None else -1)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
             item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
             item.setToolTip(0, f"{entry.rel}\nsidebar_position: {entry.position if entry.position is not None else '未设置'}")
             parent.addChild(item)

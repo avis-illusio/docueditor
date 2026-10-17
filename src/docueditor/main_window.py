@@ -232,6 +232,7 @@ class MainWindow(QMainWindow):
         self.file_tree.renameRequested.connect(self.rename_document)
         self.file_tree.deleteRequested.connect(self.delete_document)
         self.file_tree.moveRequested.connect(self.move_document)
+        self.file_tree.dropRequested.connect(self.handle_drop_move)
         self.file_tree.revealRequested.connect(self.reveal_document)
         self.file_tree.refreshRequested.connect(self.refresh_tree)
         self.front_matter_panel.applyRequested.connect(self.apply_front_matter)
@@ -420,6 +421,36 @@ class MainWindow(QMainWindow):
             self.current_entry = updated
             self.front_matter_panel.set_document(updated)
         self.statusBar().showMessage(f"{updated.rel} → sidebar_position {updated.position}", 4000)
+
+    def handle_drop_move(self, source_rel: str, target_dir: str, index: int) -> None:
+        """Handle a tree drag: move the file and renumber sidebar positions."""
+        project = self._require_project()
+        if project is None:
+            return
+        entry = next((item for item in project.entries if item.rel == source_rel), None)
+        if entry is None:
+            return
+        if not self._maybe_save():
+            return
+        try:
+            updated = project.move_document(entry, target_dir, index)
+        except (ProjectError, OSError) as exc:
+            QMessageBox.critical(self, "移动失败", str(exc))
+            self.refresh_tree()
+            return
+        self._refresh_after_change()
+        self.file_tree.select(updated.rel)
+        if self.current_entry is not None:
+            refreshed = project.find(self.current_entry.path)
+            if refreshed is not None:
+                self.current_entry = refreshed
+                self.front_matter_panel.set_document(refreshed)
+        if self.current_entry is not None and self.current_entry.path == updated.path:
+            self.current_entry = updated
+            self.front_matter_panel.set_document(updated)
+        self.statusBar().showMessage(
+            f"已移动 {updated.rel} → sidebar_position {updated.position}", 4000
+        )
 
     def reveal_document(self, rel: str) -> None:
         project = self._require_project()

@@ -97,3 +97,45 @@ def test_config_summary(project: DocusaurusProject):
     summary = project.config_summary()
     assert summary["title"] == "Test Docs"
     assert summary["organizationName"] == "avis-illusio"
+
+
+def test_move_document_within_directory_renumbers(project):
+    a = project.create_doc("a", title="A")
+    b = project.create_doc("b", title="B")
+    c = project.create_doc("c", title="C")
+    assert [entry.title for entry in project.entries] == ["开始使用", "A", "B", "C"]
+    moved = project.move_document(c, "", 0)
+    assert moved.position == 1
+    assert [entry.title for entry in project.entries] == ["C", "开始使用", "A", "B"]
+    assert [entry.position for entry in project.entries] == [1, 2, 3, 4]
+
+
+def test_move_document_index_adjustment(project):
+    a = project.create_doc("a", title="A", rel_dir="sec")
+    b = project.create_doc("b", title="B", rel_dir="sec")
+    c = project.create_doc("c", title="C", rel_dir="sec")
+    # The tree passes an index calculated while A is still in the list.
+    moved = project.move_document(a, "sec", 2)
+    titles = [entry.title for entry in project.entries if entry.rel.startswith("sec/")]
+    assert titles == ["B", "A", "C"]
+    assert moved.position == 2
+
+
+def test_move_document_across_directories(project):
+    entry = project.create_doc("setup", title="Setup")
+    moved = project.move_document(entry, "guide", 0)
+    assert moved.rel == "guide/setup.md"
+    assert moved.path.is_file()
+    assert moved.position == 1
+    assert not (project.docs_dir / "setup.md").exists()
+    # The source directory is renumbered too.
+    assert [item.position for item in project.entries if "/" not in item.rel] == [1]
+
+
+def test_move_document_to_root(project):
+    entry = project.create_doc("deep", title="Deep", rel_dir="guide")
+    moved = project.move_document(entry, "", project.max_position())
+    assert moved.rel == "deep.md"
+    assert moved.path.is_file()
+    assert not (project.docs_dir / "guide" / "deep.md").exists()
+    assert [item.rel for item in project.entries] == ["intro.md", "deep.md"]
