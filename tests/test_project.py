@@ -268,3 +268,87 @@ def test_move_inside_container_keeps_index_first(project):
         if entry.rel.startswith("b/")
     }
     assert positions == {"b/index.mdx": 1, "b/c.mdx": 2, "b/a.mdx": 3}
+
+
+def test_auto_init_category_for_index(project):
+    guide = project.docs_dir / "guide"
+    guide.mkdir()
+    (guide / "index.mdx").write_text(
+        "---\ntitle: 指南\nsidebar_label: 指南侧栏\n---\n\n# 指南\n",
+        encoding="utf-8",
+    )
+    (guide / "page.mdx").write_text(
+        "---\ntitle: 页面\n---\n\n# 页面\n", encoding="utf-8"
+    )
+    project.scan()
+    data = json.loads(
+        (guide / "_category_.json").read_text(encoding="utf-8")
+    )
+    assert data["label"] == "指南侧栏"
+    assert data["link"] == {"type": "doc", "id": "guide/index"}
+    assert data["position"] == 2
+    node = next(item for item in project.sidebar_tree() if item.rel == "guide")
+    assert node.container is True
+    assert node.label == "指南侧栏"
+    assert node.position == 2
+
+
+def test_auto_init_keeps_existing_link(project):
+    guide = project.docs_dir / "guide"
+    guide.mkdir()
+    (guide / "index.mdx").write_text(
+        "---\ntitle: 指南\n---\n\n# 指南\n", encoding="utf-8"
+    )
+    category = guide / "_category_.json"
+    category.write_text(
+        json.dumps(
+            {
+                "label": "自定义",
+                "position": 5,
+                "link": {"type": "doc", "id": "custom"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    project.scan()
+    data = json.loads(category.read_text(encoding="utf-8"))
+    assert data["label"] == "自定义"
+    assert data["position"] == 5
+    assert data["link"] == {"type": "doc", "id": "custom"}
+
+
+def test_positions_are_per_directory(project):
+    first = project.create_doc("A", title="A")
+    second = project.create_doc("B", title="B")
+    ac = project.create_doc("AC", title="AC", rel_dir="C")
+    bc = project.create_doc("BC", title="BC", rel_dir="C")
+    d_ac = project.create_doc("AC", title="AC", rel_dir="D")
+    assert (first.position, second.position) == (2, 3)
+    assert (ac.position, bc.position) == (1, 2)
+    assert d_ac.position == 1
+    project.move_node("doc", second.rel, "", 0)
+    assert next(
+        entry for entry in project.entries if entry.rel == ac.rel
+    ).position == 1
+    assert next(
+        entry for entry in project.entries if entry.rel == d_ac.rel
+    ).position == 1
+
+
+def test_ensure_container_patches_existing_category(project):
+    guide = project.docs_dir / "guide"
+    guide.mkdir()
+    category = guide / "_category_.json"
+    category.write_text(
+        json.dumps({"label": "已有", "position": 3}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    entry = project.create_doc("guide", title="指南")
+    project.scan()
+    project.ensure_container(entry)
+    data = json.loads(category.read_text(encoding="utf-8"))
+    assert data["label"] == "已有"
+    # The parent level is renumbered 1..n (intro=1, 指南=2).
+    assert data["position"] == 2
+    assert data["link"] == {"type": "doc", "id": "guide/index"}

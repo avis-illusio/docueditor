@@ -144,6 +144,28 @@ docueditor --im-status
 6. **导入**：`文件 → 导入…`，选择 Novelwriter 或语雀，先看预览，再点“执行导入”（生成 `.mdx`）。
 7. **输入法（Linux）**：启动时自动识别 fcitx5/IBus；也可在 `编辑 → 输入法` 切换，或用 `--im fcitx5` / `DOCUEDITOR_IM` 覆盖（重启生效）。
 
+### 目录索引页（index.mdx）
+
+当目录内存在 `index.md` / `index.mdx` / `README.md` / 与目录同名的文档时，Docueditor 会在打开项目或刷新时自动补全该目录的 `_category_.json`：
+
+```json
+{
+  "label": "sidebar_label 或 title",
+  "position": 3,
+  "link": {
+    "type": "doc",
+    "id": "guide/index"
+  }
+}
+```
+
+- `label` 优先取文档的 `sidebar_label` front matter，其次 `title`；
+- `link.id` 是文档 id（默认是相对 docs 的路径去扩展名，如 `guide/index`）；
+- 已有 `link` 不会被覆盖；已有 `label` / `position` 也保留；
+- 目录索引文档的 URL 通过 `slug` 保持 `/<目录>` 直链。
+
+`sidebar_position` 与 `_category_.json` 的 `position` **只在同一目录层级内排序**：`A.mdx`、`B.mdx`、`C/` 共用一组序号，`C/AC.mdx`、`C/BC.mdx`、`D/AC.mdx` 各自在自己的目录内从 1 开始；拖拽重排只重写当前层级的 `1..n`。
+
 ## 导入说明
 
 ### Novelwriter

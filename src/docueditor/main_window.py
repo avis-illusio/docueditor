@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         self.file_tree.set_tree(project.sidebar_tree())
         self._set_project_enabled(True)
         self.status_project.setText(str(project.root))
+        self._notify_auto_init(project)
         self.setWindowTitle(f"{project.name} — Docueditor")
         self._settings.setValue("lastProject", str(project.root))
         if project.entries:
@@ -602,6 +603,7 @@ class MainWindow(QMainWindow):
             return
         self.project.scan()
         self.file_tree.set_tree(self.project.sidebar_tree())
+        self._notify_auto_init(self.project)
         if self.current_entry is not None:
             self.file_tree.select(self._tree_rel(self.current_entry.rel))
 
@@ -610,6 +612,7 @@ class MainWindow(QMainWindow):
             return
         self.project.scan()
         self.file_tree.set_tree(self.project.sidebar_tree())
+        self._notify_auto_init(self.project)
 
     # ------------------------------------------------------------------ save
     def _panel_overrides(self) -> dict[str, object]:
@@ -626,6 +629,12 @@ class MainWindow(QMainWindow):
             if current != value:
                 overrides[key] = value
         return overrides
+
+    def _notify_auto_init(self, project: DocusaurusProject) -> None:
+        if project.auto_init_count:
+            self.statusBar().showMessage(
+                f"已自动补全 {project.auto_init_count} 个 _category_.json", 8000
+            )
 
     def save_current(self) -> bool:
         if self.project is None or self.current_entry is None:

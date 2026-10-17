@@ -95,6 +95,7 @@ class DocusaurusProject:
         self.sidebars_path: Path | None = None
         self._entries: list[DocEntry] = []
         self._dirs: list[DirEntry] = []
+        self.auto_init_count = 0
 
     # ------------------------------------------------------------------ load
     def load(self) -> "DocusaurusProject":
@@ -152,6 +153,7 @@ class DocusaurusProject:
         entries.sort(key=DocEntry.sort_key)
         self._entries = entries
         self._dirs = directories
+        self._auto_init_categories()
         return entries
 
     def _read_dir(self, path: Path) -> DirEntry:
@@ -177,6 +179,91 @@ class DocusaurusProject:
             link=link if isinstance(link, dict) else None,
             has_category=(path / "_category_.json").is_file(),
         )
+
+    # ------------------------------------------------- category index pages
+    def _category_index_entry(self, directory: DirEntry) -> DocEntry | None:
+        """Find an index / README / same-name document inside *directory*."""
+        names = ["index", "readme", directory.path.name.lower()]
+        for name in names:
+            for entry in self._entries:
+                if (
+                    self._rel_dir(entry) == directory.rel
+                    and entry.path.stem.lower() == name
+                ):
+                    return entry
+        return None
+
+    @staticmethod
+    def _document_id(entry: DocEntry, directory_rel: str) -> str:
+        raw_id = entry.front_matter.values.get("id")
+        if isinstance(raw_id, str) and raw_id.strip():
+            doc_id = raw_id.strip()
+        else:
+            doc_id = entry.path.stem
+        return f"{directory_rel}/{doc_id}" if directory_rel else doc_id
+
+    def _ensure_category(
+        self,
+        directory: DirEntry,
+        index_entry: DocEntry,
+        preferred_position: int | None = None,
+    ) -> bool:
+        """Create/patch ``_category_.json`` so a folder links to its index page.
+
+        Only the missing ``link`` (and missing label/position) is added; a
+        user-provided link is never overwritten.
+        """
+        category_path = directory.path / "_category_.json"
+        data = self._category_data(directory.path)
+        link = data.get("link")
+        if (
+            isinstance(link, dict)
+            and link.get("type") == "doc"
+            and isinstance(link.get("id"), str)
+            and link["id"].strip()
+        ):
+            return False
+        label = index_entry.front_matter.values.get("sidebar_label")
+        if not isinstance(label, str) or not label.strip():
+            label = index_entry.title
+        if not isinstance(data.get("label"), str) or not data["label"].strip():
+            data["label"] = str(label).strip()
+        if data.get("position") is None and preferred_position is not None:
+            data["position"] = preferred_position
+        if data.get("position") is None:
+            data["position"] = self.next_position(self._parent_rel(directory.rel))
+        data["link"] = {
+            "type": "doc",
+            "id": self._document_id(index_entry, directory.rel),
+        }
+        try:
+            write_text(
+                category_path,
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            )
+        except OSError:
+            return False
+        directory.has_category = True
+        directory.link = data["link"]
+        directory.label = str(data.get("label", directory.label)).strip()
+        position = data.get("position")
+        if isinstance(position, str):
+            try:
+                position = int(position)
+            except ValueError:
+                position = None
+        if isinstance(position, int):
+            directory.position = position
+        return True
+
+    def _auto_init_categories(self) -> int:
+        count = 0
+        for directory in self._dirs:
+            index_entry = self._category_index_entry(directory)
+            if index_entry is not None and self._ensure_category(directory, index_entry):
+                count += 1
+        self.auto_init_count = count
+        return count
 
     def _read_entry(self, path: Path) -> DocEntry:
         assert self.docs_dir is not None
@@ -657,26 +744,17 @@ class DocusaurusProject:
         write_text(target, text if text.endswith("\n") else text + "\n")
         entry.path.unlink()
 
-        category_path = container_path / "_category_.json"
-        if not category_path.exists():
-            doc_id = f"{container_rel}/index"
-            original_id = original.values.get("id")
-            if original_id:
-                doc_id = f"{container_rel}/{original_id}"
-            position = (
-                entry.position
-                if entry.position is not None
-                else self.next_position(parent_rel)
-            )
-            data = {
-                "label": entry.title,
-                "position": position,
-                "link": {"type": "doc", "id": doc_id},
-            }
-            write_text(
-                category_path,
-                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-            )
+        index_entry = self._read_entry(target)
+        container_entry = DirEntry(
+            path=container_path,
+            rel=container_rel,
+            label=index_entry.title,
+            position=entry.position,
+            has_category=(container_path / "_category_.json").is_file(),
+        )
+        self._ensure_category(
+            container_entry, index_entry, preferred_position=entry.position
+        )
         self.scan()
         self._renumber(parent_rel)
         self.scan()
