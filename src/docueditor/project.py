@@ -829,7 +829,7 @@ module.exports = sidebars;
         ":root {\n  --ifm-color-primary: #2e8555;\n}\n",
     )
     write_text(
-        root_path / "docs" / "intro.md",
+        root_path / "docs" / "intro.mdx",
         """---
 title: 开始使用
 sidebar_position: 1

@@ -15,7 +15,7 @@ def test_scaffold_creates_required_files(project: DocusaurusProject):
     assert project.docs_dir is not None
     assert (project.root / "sidebars.js").is_file()
     assert (project.root / "package.json").is_file()
-    assert (project.docs_dir / "intro.md").is_file()
+    assert (project.docs_dir / "intro.mdx").is_file()
     assert project.entries
 
 
@@ -138,14 +138,14 @@ def test_move_document_to_root(project):
     assert moved.rel == "deep.mdx"
     assert moved.path.is_file()
     assert not (project.docs_dir / "guide" / "deep.mdx").exists()
-    assert [item.rel for item in project.entries] == ["intro.md", "deep.mdx"]
+    assert [item.rel for item in project.entries] == ["intro.mdx", "deep.mdx"]
 
 
 import json
 
 
 def test_sidebar_tree_mixes_folders_and_documents(project):
-    intro = next(item for item in project.entries if item.rel == "intro.md")
+    intro = next(item for item in project.entries if item.rel == "intro.mdx")
     project.set_position(intro, 5)
     guide = project.create_doc("x", title="X", rel_dir="guide")
     category = project.docs_dir / "guide" / "_category_.json"

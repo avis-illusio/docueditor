@@ -137,7 +137,7 @@ def test_tree_drop_target_calculation(qapp, project):
 def test_tree_labels_have_no_position_prefix(qapp, project):
     window = MainWindow()
     window._load_project(project)
-    item = window.file_tree._find_item("intro.md")
+    item = window.file_tree._find_item("intro.mdx")
     assert item is not None
     assert item.text(0) == "开始使用"
     window.deleteLater()
