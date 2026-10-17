@@ -81,6 +81,8 @@ class TreeNode:
     children: list["TreeNode"] = field(default_factory=list)
     entry: DocEntry | None = None
     directory: DirEntry | None = None
+    container: bool = False
+    index_rel: str | None = None
 
 
 class DocusaurusProject:
@@ -245,16 +247,35 @@ class DocusaurusProject:
             TreeNode("doc", entry.rel, entry.title, entry.position, entry=entry)
             for entry in docs
         ]
-        nodes += [
-            TreeNode(
-                "dir",
-                directory.rel,
-                directory.label,
-                directory.position,
-                directory=directory,
+        for directory in dirs:
+            index_entry = next(
+                (
+                    entry
+                    for entry in self._entries
+                    if self._rel_dir(entry) == directory.rel
+                    and entry.path.stem.lower() == "index"
+                ),
+                None,
             )
-            for directory in dirs
-        ]
+            position = directory.position
+            label = directory.label
+            if index_entry is not None:
+                if position is None:
+                    position = index_entry.position
+                if (not directory.has_category) or label == Path(directory.rel).name:
+                    label = index_entry.title
+            nodes.append(
+                TreeNode(
+                    "dir",
+                    directory.rel,
+                    label,
+                    position,
+                    entry=index_entry,
+                    directory=directory,
+                    container=index_entry is not None,
+                    index_rel=index_entry.rel if index_entry is not None else None,
+                )
+            )
         nodes.sort(
             key=lambda node: (
                 node.position is None,
@@ -269,7 +290,12 @@ class DocusaurusProject:
             nodes = self._direct_nodes(parent_rel)
             for node in nodes:
                 if node.kind == "dir":
-                    node.children = build(node.rel)
+                    children = build(node.rel)
+                    if node.index_rel is not None:
+                        children = [
+                            child for child in children if child.rel != node.index_rel
+                        ]
+                    node.children = children
             return nodes
 
         return build("")
@@ -426,6 +452,15 @@ class DocusaurusProject:
                 return directory
         return None
 
+    def _container_index_rel(self, parent_rel: str) -> str | None:
+        for entry in self._entries:
+            if (
+                self._rel_dir(entry) == parent_rel
+                and entry.path.stem.lower() == "index"
+            ):
+                return entry.rel
+        return None
+
     def _renumber(self, parent_rel: str) -> None:
         """Renumber documents and folders in one sidebar level to 1..n."""
         nodes = self._direct_nodes(parent_rel)
@@ -525,15 +560,16 @@ class DocusaurusProject:
         else:
             raise ProjectError(f"未知节点类型：{kind}")
 
+        index_rel = self._container_index_rel(target_parent)
+        offset = 1 if index_rel is not None else 0
         nodes = self._direct_nodes(target_parent)
-        index = max(0, min(index, len(nodes)))
+        # ``index`` is the insertion position in the *visible* children list
+        # after the source has been removed (the tree already compensates).
+        visible_count = len(nodes) - offset
         if source_parent == target_parent:
-            for position, node in enumerate(nodes):
-                if node.kind == kind and node.rel == rel:
-                    if position < index:
-                        index -= 1
-                    break
-            index = max(0, min(index, len(nodes) - 1))
+            visible_count -= 1
+        index = max(0, min(index, visible_count))
+        model_index = index + offset
 
         new_path = source_path
         if source_parent != target_parent:
@@ -572,8 +608,20 @@ class DocusaurusProject:
         )
         if source_node is not None:
             ordered = [node for node in target_nodes if node is not source_node]
-            index = max(0, min(index, len(ordered)))
-            ordered.insert(index, source_node)
+            model_index = max(0, min(model_index, len(ordered)))
+            ordered.insert(model_index, source_node)
+            if index_rel is not None:
+                index_node = next(
+                    (
+                        node
+                        for node in ordered
+                        if node.kind == "doc" and node.rel == index_rel
+                    ),
+                    None,
+                )
+                if index_node is not None:
+                    ordered.remove(index_node)
+                    ordered.insert(0, index_node)
             self._apply_order(target_parent, ordered)
         if target_parent != source_parent:
             self._renumber(source_parent)
@@ -647,7 +695,12 @@ class DocusaurusProject:
     def move(self, entry: DocEntry, delta: int) -> DocEntry:
         """Move a document one slot up/down inside its own sidebar level."""
         parent = self._rel_dir(entry)
-        nodes = self._direct_nodes(parent)
+        index_rel = self._container_index_rel(parent)
+        nodes = [
+            node
+            for node in self._direct_nodes(parent)
+            if not (node.kind == "doc" and node.rel == index_rel)
+        ]
         index = next(
             (i for i, node in enumerate(nodes) if node.kind == "doc" and node.rel == entry.rel),
             None,
@@ -657,8 +710,7 @@ class DocusaurusProject:
         target = index + delta
         if target < 0 or target >= len(nodes):
             return entry
-        insert_at = target if delta < 0 else target + 1
-        self.move_node("doc", entry.rel, parent, insert_at)
+        self.move_node("doc", entry.rel, parent, target)
         refreshed = self.find(entry.path)
         return refreshed or entry
 

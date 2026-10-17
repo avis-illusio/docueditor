@@ -170,3 +170,25 @@ def test_new_child_document_turns_parent_into_folder(qapp, project, monkeypatch)
     assert (project.docs_dir / "parent" / "index.mdx").is_file()
     assert (project.docs_dir / "parent" / "child.md").is_file()
     window.deleteLater()
+
+
+def test_container_node_opens_index(qapp, project):
+    from docueditor.widgets.file_tree import ROLE_CONTAINER, ROLE_REL
+
+    parent = project.create_doc("b", title="文档 B")
+    project.ensure_container(parent)
+    window = MainWindow()
+    window._load_project(project)
+    window._refresh_after_change()
+    item = window.file_tree._find_item("b")
+    assert item is not None
+    assert item.data(0, ROLE_CONTAINER)
+    opened = []
+    window.file_tree.documentActivated.connect(opened.append)
+    window.file_tree._activate(item)
+    assert opened == ["b/index.mdx"]
+    window.open_document("b/index.mdx")
+    assert window.current_entry is not None
+    assert window.current_entry.rel == "b/index.mdx"
+    assert window.file_tree.tree.currentItem().data(0, ROLE_REL) == "b"
+    window.deleteLater()

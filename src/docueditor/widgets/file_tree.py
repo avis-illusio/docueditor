@@ -29,6 +29,8 @@ ROLE_TYPE = Qt.ItemDataRole.UserRole
 ROLE_REL = Qt.ItemDataRole.UserRole + 1
 ROLE_POSITION = Qt.ItemDataRole.UserRole + 2
 ROLE_PARENT = Qt.ItemDataRole.UserRole + 3
+ROLE_CONTAINER = Qt.ItemDataRole.UserRole + 4
+ROLE_INDEX = Qt.ItemDataRole.UserRole + 5
 
 
 class _DocTree(QTreeWidget):
@@ -231,7 +233,9 @@ class FileTree(QWidget):
             item.setData(
                 0, ROLE_POSITION, node.position if node.position is not None else -1
             )
-            if node.kind == "dir":
+            item.setData(0, ROLE_CONTAINER, node.container)
+            item.setData(0, ROLE_INDEX, node.index_rel or "")
+            if node.kind == "dir" and not node.container:
                 item.setIcon(
                     0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
                 )
@@ -245,11 +249,18 @@ class FileTree(QWidget):
                 item.setIcon(
                     0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
                 )
-                item.setToolTip(
-                    0,
-                    f"{node.rel}\nsidebar_position: "
-                    f"{node.position if node.position is not None else '未设置'}",
-                )
+                if node.container:
+                    item.setToolTip(
+                        0,
+                        f"{node.rel}\n页面: {node.index_rel}\nposition: "
+                        f"{node.position if node.position is not None else '未设置'}",
+                    )
+                else:
+                    item.setToolTip(
+                        0,
+                        f"{node.rel}\nsidebar_position: "
+                        f"{node.position if node.position is not None else '未设置'}",
+                    )
             parent_item.addChild(item)
             if node.kind == "dir":
                 self._build(item, node.children, node.rel)
@@ -262,6 +273,8 @@ class FileTree(QWidget):
                 total += 1
             else:
                 total += FileTree._count_docs(node.children)
+                if node.container:
+                    total += 1
         return total
 
     @staticmethod
@@ -353,23 +366,30 @@ class FileTree(QWidget):
             action = QAction("新建文档…", menu)
             action.triggered.connect(lambda: self.newDocumentRequested.emit(""))
             menu.addAction(action)
-        elif item.data(0, ROLE_TYPE) == "doc":
+        elif item.data(0, ROLE_TYPE) == "doc" or item.data(0, ROLE_CONTAINER):
+            container = bool(item.data(0, ROLE_CONTAINER))
             rel = item.data(0, ROLE_REL)
+            page_rel = item.data(0, ROLE_INDEX) if container else rel
             for label, slot in (
-                ("打开", lambda: self.documentActivated.emit(rel)),
-                ("在此文档下新建子文档…", lambda: self.newChildDocumentRequested.emit(rel)),
+                ("打开", lambda: self.documentActivated.emit(page_rel)),
+                ("在此文档下新建子文档…", lambda: self.newChildDocumentRequested.emit(page_rel)),
                 ("上移", lambda: self.moveRequested.emit(rel, -1)),
                 ("下移", lambda: self.moveRequested.emit(rel, 1)),
                 ("重命名…", lambda: self.renameRequested.emit(rel)),
-                ("在文件管理器中显示", lambda: self.revealRequested.emit(rel)),
+                ("在文件管理器中显示", lambda: self.revealRequested.emit(page_rel)),
             ):
                 action = QAction(label, menu)
                 action.triggered.connect(slot)
                 menu.addAction(action)
-            menu.addSeparator()
-            delete = QAction("删除…", menu)
-            delete.triggered.connect(lambda: self.deleteRequested.emit(rel))
-            menu.addAction(delete)
+            if container:
+                action = QAction("展开全部", menu)
+                action.triggered.connect(lambda: self._expand(item))
+                menu.addAction(action)
+            else:
+                menu.addSeparator()
+                delete = QAction("删除…", menu)
+                delete.triggered.connect(lambda: self.deleteRequested.emit(rel))
+                menu.addAction(delete)
         else:
             rel_dir = item.data(0, ROLE_REL)
             action = QAction("在此新建文档…", menu)
@@ -390,5 +410,11 @@ class FileTree(QWidget):
             self._expand(item.child(index))
 
     def _activate(self, item: QTreeWidgetItem, _column: int = 0) -> None:
-        if item is not None and item.data(0, ROLE_TYPE) == "doc":
+        if item is None:
+            return
+        if item.data(0, ROLE_TYPE) == "doc":
             self.documentActivated.emit(item.data(0, ROLE_REL))
+        elif item.data(0, ROLE_CONTAINER):
+            page_rel = item.data(0, ROLE_INDEX)
+            if page_rel:
+                self.documentActivated.emit(page_rel)

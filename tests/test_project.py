@@ -114,8 +114,8 @@ def test_move_document_index_adjustment(project):
     a = project.create_doc("a", title="A", rel_dir="sec")
     b = project.create_doc("b", title="B", rel_dir="sec")
     c = project.create_doc("c", title="C", rel_dir="sec")
-    # The tree passes an index calculated while A is still in the list.
-    moved = project.move_document(a, "sec", 2)
+    # The tree passes the insertion index after the source has been removed.
+    moved = project.move_document(a, "sec", 1)
     titles = [entry.title for entry in project.entries if entry.rel.startswith("sec/")]
     assert titles == ["B", "A", "C"]
     assert moved.position == 2
@@ -238,3 +238,33 @@ def test_move_index_document_updates_category_link(project):
         (project.docs_dir / "guide" / "_category_.json").read_text(encoding="utf-8")
     )
     assert data["link"]["id"] == "other/index"
+
+
+def test_sidebar_tree_marks_document_container(project):
+    parent = project.create_doc("b", title="文档 B")
+    child = project.create_doc("a", title="文档 A")
+    container = project.ensure_container(parent)
+    project.move_node("doc", child.rel, container, 0)
+    node = next(n for n in project.sidebar_tree() if n.rel == container)
+    assert node.kind == "dir"
+    assert node.container is True
+    assert node.index_rel == "b/index.mdx"
+    assert node.label == "文档 B"
+    assert [item.label for item in node.children] == ["文档 A"]
+    assert node.children[0].rel == "b/a.md"
+
+
+def test_move_inside_container_keeps_index_first(project):
+    parent = project.create_doc("b", title="B")
+    project.ensure_container(parent)
+    project.create_doc("a", title="A", rel_dir="b")
+    project.create_doc("c", title="C", rel_dir="b")
+    project.move_node("doc", "b/a.md", "b", 1)
+    node = next(n for n in project.sidebar_tree() if n.rel == "b")
+    assert [item.label for item in node.children] == ["C", "A"]
+    positions = {
+        entry.rel: entry.position
+        for entry in project.entries
+        if entry.rel.startswith("b/")
+    }
+    assert positions == {"b/index.mdx": 1, "b/c.md": 2, "b/a.md": 3}

@@ -300,6 +300,16 @@ class MainWindow(QMainWindow):
         if project.entries:
             self.open_document(project.entries[0].rel)
 
+    @staticmethod
+    def _tree_rel(rel: str) -> str:
+        """Map an index document back to its folder node in the tree."""
+        path = Path(rel)
+        if path.stem.lower() == "index":
+            parent = path.parent.as_posix()
+            if parent not in ("", "."):
+                return parent
+        return rel
+
     def _require_project(self) -> DocusaurusProject | None:
         if self.project is None:
             QMessageBox.information(self, "没有项目", "请先打开或新建一个 Docusaurus 项目。")
@@ -315,7 +325,7 @@ class MainWindow(QMainWindow):
             self.center_stack.setCurrentWidget(self.editor)
             return
         if not self._maybe_save():
-            self.file_tree.select(self.current_entry.rel if self.current_entry else rel)
+            self.file_tree.select(self._tree_rel(self.current_entry.rel if self.current_entry else rel))
             return
         entry = next((item for item in project.entries if item.rel == rel), None)
         if entry is None:
@@ -332,7 +342,7 @@ class MainWindow(QMainWindow):
         self.action_source_mode.blockSignals(False)
         self.editor.set_source_mode(False)
         self.setWindowTitle(f"{entry.rel} — {project.name} — Docueditor")
-        self.file_tree.select(rel)
+        self.file_tree.select(self._tree_rel(rel))
         self.statusBar().showMessage(f"已打开 {entry.rel}", 3000)
 
     def new_document(self, rel_dir: str) -> None:
@@ -417,7 +427,7 @@ class MainWindow(QMainWindow):
             return
         updated = project.move(entry, delta)
         self._refresh_after_change()
-        self.file_tree.select(updated.rel)
+        self.file_tree.select(self._tree_rel(updated.rel))
         if self.current_entry is not None and self.current_entry.path == updated.path:
             self.current_entry = updated
             self.front_matter_panel.set_document(updated)
@@ -472,7 +482,7 @@ class MainWindow(QMainWindow):
             and self.current_entry.path == source_path
         )
         self._refresh_after_change()
-        self.file_tree.select(new_rel)
+        self.file_tree.select(self._tree_rel(new_rel))
         if was_current:
             self.open_document(new_rel)
         elif self.current_entry is not None:
@@ -534,7 +544,7 @@ class MainWindow(QMainWindow):
         self.project.scan()
         self.file_tree.set_tree(self.project.sidebar_tree())
         if self.current_entry is not None:
-            self.file_tree.select(self.current_entry.rel)
+            self.file_tree.select(self._tree_rel(self.current_entry.rel))
 
     def _refresh_after_change(self) -> None:
         if self.project is None:
@@ -576,7 +586,7 @@ class MainWindow(QMainWindow):
         self.front_matter_panel.set_document(entry)
         self.project.scan()
         self.file_tree.set_tree(self.project.sidebar_tree())
-        self.file_tree.select(entry.rel)
+        self.file_tree.select(self._tree_rel(entry.rel))
         self.setWindowTitle(f"{entry.rel} — {self.project.name} — Docueditor")
         self.statusBar().showMessage(f"已保存 {entry.rel}", 3000)
         return True
@@ -632,7 +642,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, 8000)
         QMessageBox.information(self, "导入完成", message)
         if self.project.entries:
-            self.file_tree.select(self.project.entries[0].rel)
+            self.file_tree.select(self._tree_rel(self.project.entries[0].rel))
 
     def _on_config_saved(self, changed: list) -> None:
         if not changed:
