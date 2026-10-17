@@ -47,6 +47,21 @@ class InputMethodStatus:
             return "fcitx5"
         return "IBus" if self.module == "ibus" else self.module
 
+    def report(self) -> str:
+        lines = [
+            f"choice: {self.requested}",
+            f"module: {self.module or '未启用'}",
+            f"source: {self.source}",
+            f"plugin available: {self.plugin_available}",
+            f"QT_IM_MODULE={os.environ.get('QT_IM_MODULE', '<unset>')}",
+            f"XMODIFIERS={os.environ.get('XMODIFIERS', '<unset>')}",
+            f"QT_PLUGIN_PATH={os.environ.get('QT_PLUGIN_PATH', '<unset>')}",
+            "plugins:",
+        ]
+        for name, path in sorted(self.plugins.items()):
+            lines.append(f"  {name}: {path}")
+        return "\n".join(lines)
+
     @property
     def plugin_available(self) -> bool:
         if self.module is None:

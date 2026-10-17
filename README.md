@@ -119,6 +119,21 @@ docueditor --im none            # 关闭输入法模块
 
 AppImage 与 PyInstaller 包不内置输入法插件，运行时从系统加载，请先安装上面的 fcitx5-qt。
 
+如果打包版提示 fcitx5 插件加载失败（`CXXABI_1.3.15 not found`），说明包内自带的
+libstdc++ 比系统插件旧。v0.5.1 起启动器会自动预加载系统 libstdc++；旧版本可以临时这样启动：
+
+```bash
+LD_PRELOAD=/usr/lib/libstdc++.so.6 docueditor
+```
+
+诊断当前状态：
+
+```bash
+docueditor --im-status
+```
+
+会打印 Qt/PySide6 版本、会话类型、`QT_IM_MODULE`、插件路径以及 fcitx5/IBus 插件是否找到。
+
 ## 基本用法
 
 1. **打开项目**：`文件 → 打开 Docusaurus 项目`，选择包含 `docusaurus.config.js` 的目录。

@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
         else:
             text = f"当前：{module}（QT_IM_MODULE={status.module or '—'}）"
         self.im_status_action.setText(text)
+        self.im_status_action.setToolTip(status.report())
 
     def _set_input_method(self, choice: str) -> None:
         self._settings.setValue("inputMethod", choice)
