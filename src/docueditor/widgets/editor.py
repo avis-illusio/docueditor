@@ -237,6 +237,9 @@ class MarkdownEditor(QWidget):
     def set_front_matter_overrides(self, overrides: dict[str, object]) -> None:
         self._pending_overrides.update(overrides)
 
+    def clear_front_matter_overrides(self) -> None:
+        self._pending_overrides.clear()
+
     def title(self) -> str:
         value = self._pending_overrides.get("title", self._front_matter.values.get("title"))
         if isinstance(value, str) and value.strip():
@@ -247,6 +250,7 @@ class MarkdownEditor(QWidget):
         if enabled == self._source_mode:
             self.mode_button.setChecked(enabled)
             return
+        self._pending_overrides.clear()
         if enabled:
             text = self.current_text()
             self._loading = True

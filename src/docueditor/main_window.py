@@ -7,7 +7,6 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication,
     QDockWidget,
     QFileDialog,
     QInputDialog,
@@ -23,8 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import config_editor
 from .project import DocusaurusProject, DocEntry, ProjectError, scaffold_project
+from .utils import read_text
 from .widgets.config_panel import ConfigPanel
 from .widgets.editor import MarkdownEditor
 from .widgets.file_tree import FileTree
@@ -323,7 +322,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "打开失败", f"找不到文档：{rel}")
             return
         self.current_entry = entry
-        self.editor.load_document(entry.path, entry.path.read_text(encoding="utf-8"))
+        self.editor.load_document(entry.path, read_text(entry.path))
         self.center_stack.setCurrentWidget(self.editor)
         self.front_matter_panel.set_document(entry)
         self.action_source_mode.blockSignals(True)
@@ -448,11 +447,27 @@ class MainWindow(QMainWindow):
         self.file_tree.set_entries(self.project.entries)
 
     # ------------------------------------------------------------------ save
+    def _panel_overrides(self) -> dict[str, object]:
+        if self.current_entry is None:
+            return {}
+        original = self.current_entry.front_matter.values
+        panel = self.front_matter_panel.values()
+        overrides: dict[str, object] = {}
+        for key, value in panel.items():
+            current = original.get(key)
+            if key == "tags":
+                current = list(current) if isinstance(current, (list, tuple)) else ([] if not current else current)
+                value = list(value) if isinstance(value, (list, tuple)) else ([] if not value else value)
+            if current != value:
+                overrides[key] = value
+        return overrides
+
     def save_current(self) -> bool:
         if self.project is None or self.current_entry is None:
             return True
-        if self.front_matter_panel is not None and self.current_entry is not None:
-            self.editor.set_front_matter_overrides(self.front_matter_panel.values())
+        overrides = self._panel_overrides()
+        if overrides:
+            self.editor.set_front_matter_overrides(overrides)
         text = self.editor.current_text()
         try:
             entry = self.project.write_document(self.current_entry, text)
@@ -461,6 +476,7 @@ class MainWindow(QMainWindow):
             return False
         self.current_entry = entry
         self.editor.set_modified(False)
+        self.editor.clear_front_matter_overrides()
         self.front_matter_panel.set_document(entry)
         self.project.scan()
         self.file_tree.set_entries(self.project.entries)

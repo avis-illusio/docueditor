@@ -157,8 +157,6 @@ class FrontMatter:
             if start is None:
                 if value is None:
                     continue
-                if lines and lines[-1].strip():
-                    pass
                 lines.extend(rendered)
             else:
                 lines[start:end] = rendered
