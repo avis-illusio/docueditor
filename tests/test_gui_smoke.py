@@ -101,7 +101,7 @@ def test_drop_handler_moves_document(qapp, project):
     window._load_project(project)
     entry = project.create_doc("second", title="Second")
     window._refresh_after_change()
-    window.handle_drop_move(entry.rel, "", 0)
+    window.handle_drop_move("doc", entry.rel, "", 0, "")
     ordered = [item.title for item in project.entries]
     assert ordered[0] == "Second"
     assert window.current_entry is not None
@@ -111,37 +111,62 @@ def test_drop_handler_moves_document(qapp, project):
 def test_tree_drop_target_calculation(qapp, project):
     from PySide6.QtWidgets import QAbstractItemView
 
-    from docueditor.widgets.file_tree import ROLE_TYPE
-
     window = MainWindow()
     window._load_project(project)
     a = project.create_doc("a", title="A")
     b = project.create_doc("b", title="B")
     c = project.create_doc("c", title="C")
+    project.create_doc("x", title="X", rel_dir="guide")
     window._refresh_after_change()
     tree = window.file_tree.tree
+    indicator = QAbstractItemView.DropIndicatorPosition
 
     def item_for(rel):
-        window.file_tree.select(rel)
-        return tree.currentItem()
+        return window.file_tree._find_item(rel)
 
-    indicator = QAbstractItemView.DropIndicatorPosition
-    # Drag C above A -> index 1 (siblings are intro, a, b, c).
-    assert tree._drop_target(c.rel, item_for(a.rel), indicator.AboveItem) == ("", 1)
-    # Drag A below B -> [intro, b, a, c].
-    assert tree._drop_target(a.rel, item_for(b.rel), indicator.BelowItem) == ("", 2)
-    # Drop C onto a directory -> append inside it.
-    folder = project.create_doc("x", title="X", rel_dir="guide")
+    # Siblings at the root: intro, a, b, c.
+    assert tree._drop_target("doc", c.rel, "", item_for(a.rel), indicator.AboveItem) == ("", 1, "")
+    assert tree._drop_target("doc", a.rel, "", item_for(b.rel), indicator.BelowItem) == ("", 2, "")
+    # Dropping on a folder appends inside it.
+    assert tree._drop_target("doc", c.rel, "", item_for("guide"), indicator.OnItem) == ("guide", 1, "")
+    # Dropping on a document turns that document into a folder.
+    assert tree._drop_target("doc", c.rel, "", item_for(a.rel), indicator.OnItem) == ("", 0, a.rel)
+    window.deleteLater()
+
+
+def test_tree_labels_have_no_position_prefix(qapp, project):
+    window = MainWindow()
+    window._load_project(project)
+    item = window.file_tree._find_item("intro.md")
+    assert item is not None
+    assert item.text(0) == "开始使用"
+    window.deleteLater()
+
+
+def test_drop_on_document_creates_container(qapp, project):
+    target = project.create_doc("target", title="Target")
+    source = project.create_doc("source", title="Source")
+    window = MainWindow()
+    window._load_project(project)
     window._refresh_after_change()
-    dir_item = None
-    stack = [tree.invisibleRootItem()]
-    while stack:
-        item = stack.pop()
-        for index in range(item.childCount()):
-            child = item.child(index)
-            if child.data(0, ROLE_TYPE) == "dir":
-                dir_item = child
-            stack.append(child)
-    assert dir_item is not None
-    assert tree._drop_target(c.rel, dir_item, indicator.OnItem) == ("guide", 1)
+    window.handle_drop_move("doc", source.rel, "", 0, target.rel)
+    assert (project.docs_dir / "target" / "index.mdx").is_file()
+    assert (project.docs_dir / "target" / "source.md").is_file()
+    assert not (project.docs_dir / "target.md").exists()
+    assert window.current_entry is not None
+    window.deleteLater()
+
+
+def test_new_child_document_turns_parent_into_folder(qapp, project, monkeypatch):
+    window = MainWindow()
+    window._load_project(project)
+    parent = project.create_doc("parent", title="Parent")
+    window._refresh_after_change()
+    monkeypatch.setattr(
+        "docueditor.main_window.QInputDialog.getText",
+        staticmethod(lambda *args, **kwargs: ("Child", True)),
+    )
+    window.new_child_document(parent.rel)
+    assert (project.docs_dir / "parent" / "index.mdx").is_file()
+    assert (project.docs_dir / "parent" / "child.md").is_file()
     window.deleteLater()

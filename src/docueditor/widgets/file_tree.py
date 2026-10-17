@@ -1,14 +1,18 @@
-"""Document tree for a Docusaurus project."""
+"""Sidebar tree for a Docusaurus project.
+
+The tree mirrors the generated sidebar: documents and ``_category_.json``
+folders share one position space, so a folder can be dragged between levels
+just like a document.  Dropping never moves items inside Qt; it only reports
+the intended target and the project model performs the file move and
+renumbers positions.
+"""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -19,22 +23,25 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..project import DocEntry
+from ..project import TreeNode
 
 ROLE_TYPE = Qt.ItemDataRole.UserRole
 ROLE_REL = Qt.ItemDataRole.UserRole + 1
 ROLE_POSITION = Qt.ItemDataRole.UserRole + 2
+ROLE_PARENT = Qt.ItemDataRole.UserRole + 3
 
 
 class _DocTree(QTreeWidget):
-    """Internal-move tree that reports drops instead of moving items itself."""
+    """Internal-move tree that reports drops instead of moving items."""
 
-    dropRequested = Signal(str, str, int)
+    dropRequested = Signal(str, str, str, int, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._entries: list[DocEntry] = []
+        self._nodes: list[TreeNode] = []
+        self._drag_kind: str | None = None
         self._drag_rel: str | None = None
+        self._drag_parent: str = ""
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
@@ -42,88 +49,125 @@ class _DocTree(QTreeWidget):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setAutoExpandDelay(350)
 
-    def set_entries_docs(self, entries: list[DocEntry]) -> None:
-        self._entries = list(entries)
+    def set_tree_nodes(self, nodes: list[TreeNode]) -> None:
+        self._nodes = list(nodes)
 
-    @staticmethod
-    def _dir_of(rel: str) -> str:
-        parent = Path(rel).parent.as_posix()
-        return "" if parent in ("", ".") else parent
+    def _children_of(self, parent_rel: str) -> list[TreeNode]:
+        if not parent_rel:
+            return self._nodes
+        stack = list(self._nodes)
+        while stack:
+            node = stack.pop()
+            if node.kind == "dir":
+                if node.rel == parent_rel:
+                    return node.children
+                stack.extend(node.children)
+        return []
 
     def startDrag(self, supported_actions: Qt.DropAction) -> None:  # noqa: N802
         item = self.currentItem()
-        if item is not None and item.data(0, ROLE_TYPE) == "doc":
+        if item is not None and item.data(0, ROLE_TYPE) in {"doc", "dir"}:
+            self._drag_kind = item.data(0, ROLE_TYPE)
             self._drag_rel = item.data(0, ROLE_REL)
+            self._drag_parent = item.data(0, ROLE_PARENT) or ""
         else:
+            self._drag_kind = None
             self._drag_rel = None
+            self._drag_parent = ""
         super().startDrag(supported_actions)
+        self._drag_kind = None
         self._drag_rel = None
+        self._drag_parent = ""
 
     def dropEvent(self, event) -> None:  # noqa: N802
-        if event.source() is not self or self._drag_rel is None:
+        if (
+            event.source() is not self
+            or self._drag_kind is None
+            or self._drag_rel is None
+        ):
             event.ignore()
             return
         target_item = self.itemAt(event.position().toPoint())
         indicator = self.dropIndicatorPosition()
-        target = self._drop_target(self._drag_rel, target_item, indicator)
-        # Never let Qt move the item: the project model moves the file and
-        # renumbers sidebar_position, then the tree is rebuilt from disk.
+        target = self._drop_target(
+            self._drag_kind,
+            self._drag_rel,
+            self._drag_parent,
+            target_item,
+            indicator,
+        )
+        # The project model moves files and renumbers positions; the tree is
+        # rebuilt from disk afterwards.
         event.ignore()
         if target is not None:
-            self.dropRequested.emit(self._drag_rel, target[0], target[1])
+            parent_rel, index, container_doc = target
+            self.dropRequested.emit(
+                self._drag_kind,
+                self._drag_rel,
+                parent_rel,
+                index,
+                container_doc,
+            )
 
-    def _drop_target(self, source_rel: str, target_item, indicator):
-        source_dir = self._dir_of(source_rel)
+    def _drop_target(
+        self,
+        source_kind: str,
+        source_rel: str,
+        source_parent: str,
+        target_item: QTreeWidgetItem | None,
+        indicator: QAbstractItemView.DropIndicatorPosition,
+    ) -> tuple[str, int, str] | None:
         if target_item is None:
-            count = sum(1 for item in self._entries if self._dir_of(item.rel) == "")
-            return ("", count)
+            return ("", len(self._nodes), "")
         kind = target_item.data(0, ROLE_TYPE)
-        if kind == "dir":
-            if indicator == QAbstractItemView.DropIndicatorPosition.OnItem:
-                rel_dir = target_item.data(0, ROLE_REL)
-                count = sum(
-                    1 for item in self._entries if self._dir_of(item.rel) == rel_dir
-                )
-                return (rel_dir, count)
-            return None
         target_rel = target_item.data(0, ROLE_REL)
-        if target_rel == source_rel:
-            return None
-        target_dir = self._dir_of(target_rel)
-        siblings = [
-            item.rel for item in self._entries if self._dir_of(item.rel) == target_dir
-        ]
-        try:
-            index = siblings.index(target_rel)
-        except ValueError:
+        target_parent = target_item.data(0, ROLE_PARENT) or ""
+        if kind == "doc" and indicator == QAbstractItemView.DropIndicatorPosition.OnItem:
+            # Dropping onto a document turns it into a folder (Yuque-style).
+            return ("", 0, target_rel)
+        if kind == "dir" and indicator == QAbstractItemView.DropIndicatorPosition.OnItem:
+            return (target_rel, len(self._children_of(target_rel)), "")
+        siblings = self._children_of(target_parent)
+        index = next(
+            (
+                position
+                for position, node in enumerate(siblings)
+                if node.kind == kind and node.rel == target_rel
+            ),
+            None,
+        )
+        if index is None:
             return None
         if indicator == QAbstractItemView.DropIndicatorPosition.BelowItem:
             index += 1
-        elif indicator == QAbstractItemView.DropIndicatorPosition.OnItem:
-            index = len(siblings)
-        if source_dir == target_dir:
-            try:
-                source_index = siblings.index(source_rel)
-            except ValueError:
-                source_index = len(siblings)
-            if source_index < index:
+        if source_parent == target_parent:
+            source_index = next(
+                (
+                    position
+                    for position, node in enumerate(siblings)
+                    if node.kind == source_kind and node.rel == source_rel
+                ),
+                None,
+            )
+            if source_index is not None and source_index < index:
                 index -= 1
-        return (target_dir, index)
+        return (target_parent, index, "")
 
 
 class FileTree(QWidget):
     documentActivated = Signal(str)
     newDocumentRequested = Signal(str)
+    newChildDocumentRequested = Signal(str)
     renameRequested = Signal(str)
     deleteRequested = Signal(str)
     moveRequested = Signal(str, int)
-    dropRequested = Signal(str, str, int)
+    dropRequested = Signal(str, str, str, int, str)
     revealRequested = Signal(str)
     refreshRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._entries: list[DocEntry] = []
+        self._nodes: list[TreeNode] = []
         self._filter_text = ""
 
         self.search = QLineEdit()
@@ -145,64 +189,88 @@ class FileTree(QWidget):
         self.count_label = QLabel("0 篇文档")
         self.count_label.setObjectName("treeCount")
 
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.addWidget(self.search, 1)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
-        layout.addLayout(header)
+        layout.addWidget(self.search)
         layout.addWidget(self.tree, 1)
         layout.addWidget(self.count_label)
 
     # ----------------------------------------------------------------- data
-    def set_entries(self, entries: list[DocEntry]) -> None:
+    def set_tree(self, nodes: list[TreeNode]) -> None:
         expanded = self._expanded_paths()
-        selected = self.selected_rel()
-        self._entries = list(entries)
-        self.tree.set_entries_docs(entries)
+        selected = self.selected_rel() or self.selected_dir()
+        self._nodes = list(nodes)
+        self.tree.set_tree_nodes(nodes)
         self.tree.clear()
-        directories: dict[str, QTreeWidgetItem] = {}
-        for entry in entries:
-            parts = entry.rel.split("/")
-            parent = self.tree.invisibleRootItem()
-            for depth, part in enumerate(parts[:-1]):
-                key = "/".join(parts[: depth + 1])
-                item = directories.get(key)
-                if item is None:
-                    item = QTreeWidgetItem([part])
-                    item.setData(0, ROLE_TYPE, "dir")
-                    item.setData(0, ROLE_REL, key)
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
-                    item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
-                    item.setForeground(0, QColor("#8a8f98"))
-                    parent.addChild(item)
-                    directories[key] = item
-                parent = item
-            item = QTreeWidgetItem([self._label(entry)])
-            item.setData(0, ROLE_TYPE, "doc")
-            item.setData(0, ROLE_REL, entry.rel)
-            item.setData(0, ROLE_POSITION, entry.position if entry.position is not None else -1)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
-            item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
-            item.setToolTip(0, f"{entry.rel}\nsidebar_position: {entry.position if entry.position is not None else '未设置'}")
-            parent.addChild(item)
+        self._build(self.tree.invisibleRootItem(), nodes, "")
         for path in expanded:
-            item = self._find_dir(path)
+            item = self._find_item(path)
             if item is not None:
                 item.setExpanded(True)
-        self.count_label.setText(f"{len(entries)} 篇文档")
+        if not expanded and self.tree.topLevelItemCount() == 1:
+            self.tree.topLevelItem(0).setExpanded(True)
+        documents = self._count_docs(nodes)
+        folders = self._count_dirs(nodes)
+        self.count_label.setText(f"{documents} 篇文档 · {folders} 个目录")
         self._apply_filter(self._filter_text)
         if selected:
             self.select(selected)
 
+    def _build(
+        self,
+        parent_item: QTreeWidgetItem,
+        nodes: list[TreeNode],
+        parent_rel: str,
+    ) -> None:
+        for node in nodes:
+            item = QTreeWidgetItem([node.label])
+            item.setData(0, ROLE_TYPE, node.kind)
+            item.setData(0, ROLE_REL, node.rel)
+            item.setData(0, ROLE_PARENT, parent_rel)
+            item.setData(
+                0, ROLE_POSITION, node.position if node.position is not None else -1
+            )
+            if node.kind == "dir":
+                item.setIcon(
+                    0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+                )
+                item.setForeground(0, QColor("#8a8f98"))
+                item.setToolTip(
+                    0,
+                    f"{node.rel}\nposition: "
+                    f"{node.position if node.position is not None else '未设置'}",
+                )
+            else:
+                item.setIcon(
+                    0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+                )
+                item.setToolTip(
+                    0,
+                    f"{node.rel}\nsidebar_position: "
+                    f"{node.position if node.position is not None else '未设置'}",
+                )
+            parent_item.addChild(item)
+            if node.kind == "dir":
+                self._build(item, node.children, node.rel)
+
     @staticmethod
-    def _label(entry: DocEntry) -> str:
-        title = entry.title or entry.path.stem
-        if entry.position is not None:
-            return f"{entry.position:02d} · {title}" if entry.position < 100 else f"{entry.position} · {title}"
-        return f"— · {title}"
+    def _count_docs(nodes: list[TreeNode]) -> int:
+        total = 0
+        for node in nodes:
+            if node.kind == "doc":
+                total += 1
+            else:
+                total += FileTree._count_docs(node.children)
+        return total
+
+    @staticmethod
+    def _count_dirs(nodes: list[TreeNode]) -> int:
+        total = 0
+        for node in nodes:
+            if node.kind == "dir":
+                total += 1 + FileTree._count_dirs(node.children)
+        return total
 
     def _expanded_paths(self) -> list[str]:
         result: list[str] = []
@@ -216,32 +284,18 @@ class FileTree(QWidget):
                 stack.append(child)
         return result
 
-    def _find_dir(self, rel: str) -> QTreeWidgetItem | None:
+    def _find_item(self, rel: str) -> QTreeWidgetItem | None:
         stack = [self.tree.invisibleRootItem()]
         while stack:
             item = stack.pop()
             for index in range(item.childCount()):
                 child = item.child(index)
-                if child.data(0, ROLE_TYPE) == "dir" and child.data(0, ROLE_REL) == rel:
-                    return child
-                stack.append(child)
-        return None
-
-    def _find_doc(self, rel: str) -> QTreeWidgetItem | None:
-        stack = [self.tree.invisibleRootItem()]
-        while stack:
-            item = stack.pop()
-            for index in range(item.childCount()):
-                child = item.child(index)
-                if child.data(0, ROLE_TYPE) == "doc" and child.data(0, ROLE_REL) == rel:
+                if child.data(0, ROLE_REL) == rel:
                     return child
                 stack.append(child)
         return None
 
     # -------------------------------------------------------------- selection
-    def current_item(self) -> QTreeWidgetItem | None:
-        return self.tree.currentItem()
-
     def selected_rel(self) -> str | None:
         item = self.tree.currentItem()
         if item is None or item.data(0, ROLE_TYPE) != "doc":
@@ -253,12 +307,11 @@ class FileTree(QWidget):
         if item is None:
             return ""
         if item.data(0, ROLE_TYPE) == "dir":
-            return item.data(0, ROLE_REL)
-        rel = item.data(0, ROLE_REL) or ""
-        return str(Path(rel).parent.as_posix()) if "/" in rel else ""
+            return item.data(0, ROLE_REL) or ""
+        return item.data(0, ROLE_PARENT) or ""
 
     def select(self, rel: str) -> None:
-        item = self._find_doc(rel)
+        item = self._find_item(rel)
         if item is not None:
             self.tree.setCurrentItem(item)
             parent = item.parent()
@@ -272,18 +325,20 @@ class FileTree(QWidget):
         needle = text.strip().lower()
 
         def visit(item: QTreeWidgetItem) -> bool:
-            if item.data(0, ROLE_TYPE) == "doc":
-                haystack = f"{item.text(0)} {item.data(0, ROLE_REL)}".lower()
+            if item.data(0, ROLE_TYPE) not in {"doc", "dir"}:
+                return False
+            haystack = f"{item.text(0)} {item.data(0, ROLE_REL)}".lower()
+            is_dir = item.data(0, ROLE_TYPE) == "dir"
+            if is_dir:
+                any_child = False
+                for index in range(item.childCount()):
+                    any_child = visit(item.child(index)) or any_child
+                visible = any_child or not needle or needle in haystack
+                if needle and any_child:
+                    item.setExpanded(True)
+            else:
                 visible = not needle or needle in haystack
-                item.setHidden(not visible)
-                return visible
-            any_visible = False
-            for index in range(item.childCount()):
-                any_visible = visit(item.child(index)) or any_visible
-            visible = any_visible or not needle
             item.setHidden(not visible)
-            if needle and any_visible:
-                item.setExpanded(True)
             return visible
 
         root = self.tree.invisibleRootItem()
@@ -302,6 +357,7 @@ class FileTree(QWidget):
             rel = item.data(0, ROLE_REL)
             for label, slot in (
                 ("打开", lambda: self.documentActivated.emit(rel)),
+                ("在此文档下新建子文档…", lambda: self.newChildDocumentRequested.emit(rel)),
                 ("上移", lambda: self.moveRequested.emit(rel, -1)),
                 ("下移", lambda: self.moveRequested.emit(rel, 1)),
                 ("重命名…", lambda: self.renameRequested.emit(rel)),

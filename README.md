@@ -29,7 +29,9 @@ Docusaurus 的 Markdown / MDX 文档时获得 **WYSIWYG（所见即所得）** �
 | MDX 安全保护 | `import` / `export`、JSX 组件块、`:::` 指令、围栏代码块、Markdown 表格以占位符形式保留，保存时原样写回，不会被富文本转换吃掉 |
 | Front Matter 面板 | 可视化编辑 `title`、`id`、`sidebar_position`、`tags`、`draft` 等常用字段 |
 | 文件管理 | 新建、重命名、删除文档，自动维护唯一的文件名与侧边栏序号 |
-| 拖拽排序 | 像语雀一样直接拖动文档排序，自动重写 `sidebar_position`；支持拖入目录（跨目录移动） |
+| 拖拽排序 | 文档与目录共用一套 position 排序，均可拖动；支持同层插入、跨目录移动、拖到文档上变成其子页面 |
+| 目录与子文档 | 目录顺序写入 `_category_.json` 的 `position`；文档可一键转为 `目录/index.mdx`，自动生成 `_category_.json` 并保留直链 slug |
+| 清爽文件树 | 不再显示 `01 ·` 序号前缀，顺序完全由 position 决定 |
 | 项目配置 | 直接修改 `docusaurus.config.js` 中的 `title`、`tagline`、`url`、`baseUrl`、组织与项目名等字段（文本级安全改写，保留注释与格式） |
 | 导入 Novelwriter | 解析 `.nwd` 项目（`nwProject.nwx` + `content/`），按书目顺序与层级生成文档树 |
 | 导入语雀 | 支持语雀导出的 Markdown 文件夹 / ZIP / 单文件合集，转换表格、图片与语雀专有标签 |
@@ -95,8 +97,9 @@ python -m docueditor /path/to/docusaurus-site
 1. **打开项目**：`文件 → 打开 Docusaurus 项目`，选择包含 `docusaurus.config.js` 的目录。
 2. **编辑文档**：左侧文件树选择文档，中间区域直接编辑。工具栏提供标题、粗体、斜体、列表、引用、代码与链接。
 3. **保存**：`Ctrl+S`。Front Matter 与正文一起写回 `.md` / `.mdx`。
-4. **调整顺序**：直接拖动文档到目标位置（同目录排序或拖进目录），`sidebar_position` 会自动重排；也可右键 `上移 / 下移` 或修改右侧面板的数字。
-5. **导入**：`文件 → 导入…`，选择 Novelwriter 或语雀，先看预览，再点“执行导入”。
+4. **调整顺序**：直接拖动文档或目录到目标位置；拖到文档中心会把它变成目录（语雀式）。`sidebar_position` 与 `_category_.json` 的 `position` 会自动重排。
+5. **创建子文档**：右键文档 →「在此文档下新建子文档…」。原文件会自动变成 `同名目录/index.mdx`，并生成 `_category_.json` 指向该页面、保留原 URL 直链。
+6. **导入**：`文件 → 导入…`，选择 Novelwriter 或语雀，先看预览，再点“执行导入”。
 
 ## 导入说明
 
@@ -205,6 +208,8 @@ macOS arm64 `.dmg`，并附加到对应的 GitHub Release。
 - 复杂的 MDX 表达式（如嵌套 JSX 内的 Markdown）建议用源码模式编辑；
 - 项目配置改写是“文本级”的：它能处理常见的 `key: 'value'` 写法并保留注释，但无法理解任意 JS 表达式；
 - 不内置 Docusaurus 预览服务器，可在项目目录自行运行 `npm run start`。
+- 目录移动后会更新 `_category_.json` 里的 `link.id`；文档 front matter 中手写的绝对 `slug` 不会自动改写。
+- 目录的重命名与删除暂未提供（可先在文件管理器中操作）。
 
 ## 路线图
 
@@ -214,6 +219,8 @@ macOS arm64 `.dmg`，并附加到对应的 GitHub Release。
 - [ ] 文档内链接与锚点检查
 - [ ] 导入 Notion / Obsidian
 - [x] 多平台安装包（Windows / Linux / macOS）
+- [x] 目录/文档混合排序、目录拖拽、文档转容器
+- [ ] 目录重命名与删除
 - [ ] 多标签页编辑
 
 ## 许可证

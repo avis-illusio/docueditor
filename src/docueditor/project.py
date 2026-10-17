@@ -6,7 +6,9 @@ the behaviour can be unit tested without a display server.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -52,6 +54,35 @@ class DocEntry:
         return (position, natural_key(self.rel))
 
 
+@dataclass
+class DirEntry:
+    """A folder that participates in the sidebar (via _category_.json)."""
+
+    path: Path
+    rel: str
+    label: str
+    position: int | None = None
+    link: dict | None = None
+    has_category: bool = False
+
+    def sort_key(self) -> tuple[int, list[object]]:
+        position = self.position if self.position is not None else 10**6
+        return (position, natural_key(self.label))
+
+
+@dataclass
+class TreeNode:
+    """A document or folder in one sidebar level."""
+
+    kind: str  # "doc" | "dir"
+    rel: str
+    label: str
+    position: int | None = None
+    children: list["TreeNode"] = field(default_factory=list)
+    entry: DocEntry | None = None
+    directory: DirEntry | None = None
+
+
 class DocusaurusProject:
     """A folder containing a Docusaurus site."""
 
@@ -61,6 +92,7 @@ class DocusaurusProject:
         self.docs_dir: Path | None = None
         self.sidebars_path: Path | None = None
         self._entries: list[DocEntry] = []
+        self._dirs: list[DirEntry] = []
 
     # ------------------------------------------------------------------ load
     def load(self) -> "DocusaurusProject":
@@ -99,14 +131,50 @@ class DocusaurusProject:
         if self.docs_dir is None:
             raise ProjectError("项目尚未加载")
         entries: list[DocEntry] = []
+        directories: list[DirEntry] = []
         if self.docs_dir.is_dir():
             for path in sorted(self.docs_dir.rglob("*"), key=lambda p: natural_key(str(p))):
+                if path.is_dir():
+                    rel = relative_posix(path, self.docs_dir)
+                    if not rel or any(
+                        part.startswith((".", "_")) for part in Path(rel).parts
+                    ):
+                        continue
+                    directories.append(self._read_dir(path))
+                    continue
                 if not path.is_file() or path.suffix.lower() not in DOC_SUFFIXES:
+                    continue
+                if path.name.startswith((".", "_")):
                     continue
                 entries.append(self._read_entry(path))
         entries.sort(key=DocEntry.sort_key)
         self._entries = entries
+        self._dirs = directories
         return entries
+
+    def _read_dir(self, path: Path) -> DirEntry:
+        assert self.docs_dir is not None
+        data = self._category_data(path)
+        position = data.get("position")
+        if isinstance(position, str):
+            try:
+                position = int(position)
+            except ValueError:
+                position = None
+        if not isinstance(position, int):
+            position = None
+        label = data.get("label")
+        if not isinstance(label, str) or not label.strip():
+            label = path.name
+        link = data.get("link")
+        return DirEntry(
+            path=path,
+            rel=relative_posix(path, self.docs_dir),
+            label=label.strip(),
+            position=position,
+            link=link if isinstance(link, dict) else None,
+            has_category=(path / "_category_.json").is_file(),
+        )
 
     def _read_entry(self, path: Path) -> DocEntry:
         assert self.docs_dir is not None
@@ -157,12 +225,70 @@ class DocusaurusProject:
     def exists(self) -> bool:
         return self.config_path is not None and self.config_path.is_file()
 
-    def next_position(self) -> int:
-        positions = [entry.position for entry in self._entries if entry.position is not None]
+    @staticmethod
+    def _parent_rel(rel: str) -> str:
+        parent = Path(rel).parent.as_posix()
+        return "" if parent in ("", ".") else parent
+
+    def _direct_nodes(self, parent_rel: str) -> list[TreeNode]:
+        """Documents and folders directly inside *parent_rel*, in sidebar order."""
+        parent_rel = parent_rel.strip("/")
+        docs = [
+            entry for entry in self._entries if self._rel_dir(entry) == parent_rel
+        ]
+        dirs = [
+            directory
+            for directory in self._dirs
+            if self._parent_rel(directory.rel) == parent_rel
+        ]
+        nodes = [
+            TreeNode("doc", entry.rel, entry.title, entry.position, entry=entry)
+            for entry in docs
+        ]
+        nodes += [
+            TreeNode(
+                "dir",
+                directory.rel,
+                directory.label,
+                directory.position,
+                directory=directory,
+            )
+            for directory in dirs
+        ]
+        nodes.sort(
+            key=lambda node: (
+                node.position is None,
+                node.position if node.position is not None else 0,
+                natural_key(node.label),
+            )
+        )
+        return nodes
+
+    def sidebar_tree(self) -> list[TreeNode]:
+        def build(parent_rel: str) -> list[TreeNode]:
+            nodes = self._direct_nodes(parent_rel)
+            for node in nodes:
+                if node.kind == "dir":
+                    node.children = build(node.rel)
+            return nodes
+
+        return build("")
+
+    def next_position(self, parent_rel: str = "") -> int:
+        positions = [
+            node.position
+            for node in self._direct_nodes(parent_rel)
+            if node.position is not None
+        ]
         return (max(positions) + 1) if positions else 1
 
     def max_position(self) -> int:
         positions = [entry.position for entry in self._entries if entry.position is not None]
+        positions += [
+            directory.position
+            for directory in self._dirs
+            if directory.position is not None
+        ]
         return max(positions) if positions else 0
 
     def find(self, path: Path | str) -> DocEntry | None:
@@ -209,7 +335,7 @@ class DocusaurusProject:
             path = unique_path(directory, stem, suffix)
         header = {
             "title": title if title else stem.replace("-", " "),
-            "sidebar_position": position if position is not None else self.next_position(),
+            "sidebar_position": position if position is not None else self.next_position(rel_dir),
         }
         if doc_id:
             header["id"] = doc_id
@@ -273,98 +399,242 @@ class DocusaurusProject:
         rel = Path(entry.rel).parent.as_posix()
         return "" if rel in ("", ".") else rel
 
-    def move_document(self, entry: DocEntry, target_dir: str, index: int) -> DocEntry:
-        """Move *entry* into *target_dir* at *index* and renumber positions.
+    # ------------------------------------------------------- categories
+    def _category_data(self, directory: Path) -> dict:
+        path = directory / "_category_.json"
+        if not path.is_file():
+            return {}
+        try:
+            data = json.loads(read_text(path))
+        except (json.JSONDecodeError, OSError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
-        The tree passes ``index`` as a position in the target directory's
-        *current* list, which still contains the dragged document when the
-        move happens inside the same directory.  The index is adjusted here
-        after the source is removed.
+    def set_dir_position(self, directory: DirEntry, position: int) -> None:
+        path = directory.path / "_category_.json"
+        data = self._category_data(directory.path)
+        if not data:
+            data = {"label": directory.label}
+        if data.get("position") == position:
+            return
+        data["position"] = position
+        write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+    def _find_dir(self, rel: str) -> DirEntry | None:
+        for directory in self._dirs:
+            if directory.rel == rel:
+                return directory
+        return None
+
+    def _renumber(self, parent_rel: str) -> None:
+        """Renumber documents and folders in one sidebar level to 1..n."""
+        nodes = self._direct_nodes(parent_rel)
+        for position, node in enumerate(nodes, start=1):
+            if node.position == position:
+                continue
+            if node.kind == "doc":
+                entry = next(
+                    (item for item in self._entries if item.rel == node.rel), None
+                )
+                if entry is not None:
+                    self.save_doc(entry, entry.body, {"sidebar_position": position})
+            else:
+                directory = self._find_dir(node.rel)
+                if directory is not None:
+                    self.set_dir_position(directory, position)
+        self.scan()
+
+    def _apply_order(self, parent_rel: str, ordered: list[TreeNode]) -> None:
+        """Write an explicit order into documents and folder positions."""
+        for position, node in enumerate(ordered, start=1):
+            if node.kind == "doc":
+                entry = next(
+                    (item for item in self._entries if item.rel == node.rel), None
+                )
+                if entry is not None:
+                    self.save_doc(entry, entry.body, {"sidebar_position": position})
+            else:
+                directory = self._find_dir(node.rel)
+                if directory is not None:
+                    self.set_dir_position(directory, position)
+        self.scan()
+
+    def _rewrite_category_links(
+        self, root: Path, old_prefix: str, new_prefix: str
+    ) -> None:
+        """Keep _category_.json doc links valid after a folder moves."""
+        for category in root.rglob("_category_.json"):
+            data = self._category_data(category.parent)
+            link = data.get("link")
+            if not isinstance(link, dict) or link.get("type") != "doc":
+                continue
+            doc_id = link.get("id")
+            if not isinstance(doc_id, str):
+                continue
+            if doc_id == old_prefix or doc_id.startswith(old_prefix + "/"):
+                link["id"] = new_prefix + doc_id[len(old_prefix) :]
+                write_text(
+                    category, json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+                )
+
+    def move_node(
+        self, kind: str, rel: str, target_parent: str, index: int
+    ) -> tuple[str, str]:
+        """Move a document or a folder and renumber both affected levels."""
+        if self.docs_dir is None:
+            raise ProjectError("项目尚未加载")
+        target_parent = target_parent.strip("/")
+        if target_parent:
+            target_path = (self.docs_dir / target_parent).resolve()
+            if self.docs_dir not in target_path.parents:
+                raise ProjectError("目标目录不在 docs 目录内")
+        if kind == "doc":
+            entry = next((item for item in self._entries if item.rel == rel), None)
+            if entry is None:
+                raise ProjectError(f"找不到文档：{rel}")
+            source_path = entry.path
+            source_parent = self._rel_dir(entry)
+        elif kind == "dir":
+            directory = self._find_dir(rel)
+            if directory is None:
+                raise ProjectError(f"找不到目录：{rel}")
+            if target_parent == rel or target_parent.startswith(rel + "/"):
+                raise ProjectError("不能把目录移动到它自己内部")
+            source_path = directory.path
+            source_parent = self._parent_rel(directory.rel)
+        else:
+            raise ProjectError(f"未知节点类型：{kind}")
+
+        nodes = self._direct_nodes(target_parent)
+        index = max(0, min(index, len(nodes)))
+        if source_parent == target_parent:
+            for position, node in enumerate(nodes):
+                if node.kind == kind and node.rel == rel:
+                    if position < index:
+                        index -= 1
+                    break
+            index = max(0, min(index, len(nodes) - 1))
+
+        new_path = source_path
+        if source_parent != target_parent:
+            destination_dir = (
+                self.docs_dir / target_parent if target_parent else self.docs_dir
+            )
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            new_path = destination_dir / source_path.name
+            if new_path.exists():
+                if kind == "doc":
+                    new_path = unique_path(
+                        destination_dir, source_path.stem, source_path.suffix
+                    )
+                else:
+                    new_path = unique_path(destination_dir, source_path.name, "")
+            shutil.move(str(source_path), str(new_path))
+            if kind == "dir":
+                self._rewrite_category_links(
+                    new_path,
+                    rel,
+                    relative_posix(new_path, self.docs_dir),
+                )
+
+        new_rel = relative_posix(new_path, self.docs_dir)
+        self.scan()
+        target_nodes = self._direct_nodes(target_parent)
+        source_node = next(
+            (node for node in target_nodes if node.kind == kind and node.rel == new_rel),
+            None,
+        )
+        if source_node is not None:
+            ordered = [node for node in target_nodes if node is not source_node]
+            index = max(0, min(index, len(ordered)))
+            ordered.insert(index, source_node)
+            self._apply_order(target_parent, ordered)
+        if target_parent != source_parent:
+            self._renumber(source_parent)
+        self.scan()
+        return kind, new_rel
+
+    def ensure_container(self, entry: DocEntry) -> str:
+        """Turn ``foo.md`` into ``foo/index.mdx`` + ``_category_.json``.
+
+        The category links to the index document, while the index gets an
+        absolute slug so its public URL stays ``/foo`` (a direct link).
         """
         if self.docs_dir is None:
             raise ProjectError("项目尚未加载")
-        target_dir = target_dir.strip("/")
-        if target_dir:
-            directory = (self.docs_dir / target_dir).resolve()
-            if self.docs_dir not in directory.parents:
-                raise ProjectError("目标目录不在 docs 目录内")
-        source_dir = self._rel_dir(entry)
-        siblings = [
-            item
-            for item in self._entries
-            if self._rel_dir(item) == target_dir and item.path != entry.path
-        ]
-        if source_dir == target_dir:
-            current = [
-                item for item in self._entries if self._rel_dir(item) == source_dir
-            ]
-            try:
-                source_index = next(
-                    idx for idx, item in enumerate(current) if item.path == entry.path
-                )
-            except StopIteration:
-                source_index = len(current)
-            if source_index < index:
-                index -= 1
-        index = max(0, min(index, len(siblings)))
+        parent_rel = self._rel_dir(entry)
+        if entry.path.stem.lower() == "index":
+            if not parent_rel:
+                raise ProjectError("docs 根目录的 index 文档不能作为容器")
+            return parent_rel
+        container_rel = Path(entry.rel).with_suffix("").as_posix()
+        container_path = self.docs_dir / container_rel
+        if container_path.exists() and not container_path.is_dir():
+            raise ProjectError(f"已存在同名文件：{container_rel}")
+        container_path.mkdir(parents=True, exist_ok=True)
+        target = container_path / "index.mdx"
+        if target.exists():
+            raise ProjectError(f"{container_rel}/index.mdx 已存在")
+        original = frontmatter.split(read_text(entry.path))
+        overrides: dict[str, object] = {"sidebar_position": 1}
+        if not original.values.get("slug"):
+            overrides["slug"] = "/" + container_rel
+        text = original.with_overrides(overrides)
+        write_text(target, text if text.endswith("\n") else text + "\n")
+        entry.path.unlink()
 
-        if source_dir != target_dir:
-            directory = self.docs_dir / target_dir if target_dir else self.docs_dir
-            directory.mkdir(parents=True, exist_ok=True)
-            new_path = directory / entry.path.name
-            if new_path.exists():
-                new_path = unique_path(directory, entry.path.stem, entry.path.suffix)
-            entry.path.rename(new_path)
-            entry = self._read_entry(new_path)
-
-        ordered = list(siblings)
-        ordered.insert(index, entry)
-        for position, item in enumerate(ordered, start=1):
-            if item.position != position:
-                self.save_doc(item, item.body, {"sidebar_position": position})
-
-        if source_dir != target_dir:
-            self.scan()
-            remaining = [
-                item for item in self._entries if self._rel_dir(item) == source_dir
-            ]
-            for position, item in enumerate(remaining, start=1):
-                if item.position != position:
-                    self.save_doc(item, item.body, {"sidebar_position": position})
-
+        category_path = container_path / "_category_.json"
+        if not category_path.exists():
+            doc_id = f"{container_rel}/index"
+            original_id = original.values.get("id")
+            if original_id:
+                doc_id = f"{container_rel}/{original_id}"
+            position = (
+                entry.position
+                if entry.position is not None
+                else self.next_position(parent_rel)
+            )
+            data = {
+                "label": entry.title,
+                "position": position,
+                "link": {"type": "doc", "id": doc_id},
+            }
+            write_text(
+                category_path,
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            )
         self.scan()
-        return self.find(entry.path) or entry
+        self._renumber(parent_rel)
+        self.scan()
+        return container_rel
+
+    def move_document(self, entry: DocEntry, target_dir: str, index: int) -> DocEntry:
+        """Move a document to *target_dir* at *index* and renumber positions."""
+        _, rel = self.move_node("doc", entry.rel, target_dir, index)
+        if self.docs_dir is None:
+            return entry
+        return self.find(self.docs_dir / rel) or entry
 
     def set_position(self, entry: DocEntry, position: int | None) -> DocEntry:
         return self.save_doc(entry, entry.body, {"sidebar_position": position})
 
     def move(self, entry: DocEntry, delta: int) -> DocEntry:
-        """Move a document one slot up/down by swapping sidebar positions."""
-        ordered = sorted(self._entries, key=DocEntry.sort_key)
-        try:
-            index = ordered.index(entry)
-        except ValueError:
+        """Move a document one slot up/down inside its own sidebar level."""
+        parent = self._rel_dir(entry)
+        nodes = self._direct_nodes(parent)
+        index = next(
+            (i for i, node in enumerate(nodes) if node.kind == "doc" and node.rel == entry.rel),
+            None,
+        )
+        if index is None:
             return entry
-        target_index = index + delta
-        if target_index < 0 or target_index >= len(ordered):
+        target = index + delta
+        if target < 0 or target >= len(nodes):
             return entry
-        other = ordered[target_index]
-        if entry.position is None:
-            entry = self.set_position(entry, self.next_position())
-            ordered = sorted(self._entries, key=DocEntry.sort_key)
-            index = ordered.index(entry)
-            target_index = index + delta
-            if target_index < 0 or target_index >= len(ordered):
-                return entry
-            other = ordered[target_index]
-        if other.position is None:
-            other = self.set_position(other, self.next_position())
-        first_pos = entry.position
-        second_pos = other.position
-        entry = self.set_position(entry, second_pos)
-        other = self.set_position(other, first_pos)
-        self.scan()
-        return self.find(entry.path) or entry
+        insert_at = target if delta < 0 else target + 1
+        self.move_node("doc", entry.rel, parent, insert_at)
+        refreshed = self.find(entry.path)
+        return refreshed or entry
 
     def _read_and_register(self, path: Path) -> DocEntry:
         entry = self._read_entry(path)

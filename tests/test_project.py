@@ -139,3 +139,91 @@ def test_move_document_to_root(project):
     assert moved.path.is_file()
     assert not (project.docs_dir / "guide" / "deep.md").exists()
     assert [item.rel for item in project.entries] == ["intro.md", "deep.md"]
+
+
+import json
+
+
+def test_sidebar_tree_mixes_folders_and_documents(project):
+    intro = next(item for item in project.entries if item.rel == "intro.md")
+    project.set_position(intro, 5)
+    guide = project.create_doc("x", title="X", rel_dir="guide")
+    category = project.docs_dir / "guide" / "_category_.json"
+    category.write_text(
+        json.dumps({"label": "Guide", "position": 1}), encoding="utf-8"
+    )
+    later = project.create_doc("later", title="Later")
+    project.scan()
+    tree = project.sidebar_tree()
+    assert [node.label for node in tree] == ["Guide", "开始使用", "Later"]
+    assert tree[0].kind == "dir"
+    assert tree[0].children[0].rel == guide.rel
+    assert tree[0].position == 1
+    assert later.position == 6
+
+
+def test_move_folder_into_another_folder(project):
+    first = project.create_doc("x", title="X", rel_dir="alpha")
+    second = project.create_doc("y", title="Y", rel_dir="beta")
+    project.scan()
+    kind, new_rel = project.move_node("dir", "alpha", "beta", 1)
+    assert kind == "dir"
+    assert new_rel == "beta/alpha"
+    assert (project.docs_dir / "beta" / "alpha" / "x.md").is_file()
+    assert not (project.docs_dir / "alpha").exists()
+    beta = next(node for node in project.sidebar_tree() if node.rel == "beta")
+    assert beta.position == 2
+    assert [node.label for node in beta.children] == ["Y", "alpha"]
+
+
+def test_move_folder_rewrites_category_links(project):
+    project.create_doc("x", title="X", rel_dir="guide")
+    category = project.docs_dir / "guide" / "_category_.json"
+    category.write_text(
+        json.dumps(
+            {
+                "label": "Guide",
+                "position": 1,
+                "link": {"type": "doc", "id": "guide/x"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    project.scan()
+    _, new_rel = project.move_node("dir", "guide", "section", 0)
+    assert new_rel == "section/guide"
+    data = json.loads(
+        (project.docs_dir / "section" / "guide" / "_category_.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert data["link"]["id"] == "section/guide/x"
+
+
+def test_ensure_container_creates_index_and_category(project):
+    entry = project.create_doc("widgets", title="Widgets", body="Hello")
+    original_position = entry.position
+    container = project.ensure_container(entry)
+    assert container == "widgets"
+    index = project.docs_dir / "widgets" / "index.mdx"
+    assert index.is_file()
+    assert not entry.path.exists()
+    text = index.read_text(encoding="utf-8")
+    assert "slug: /widgets" in text
+    assert "sidebar_position: 1" in text
+    data = json.loads(
+        (project.docs_dir / "widgets" / "_category_.json").read_text(encoding="utf-8")
+    )
+    assert data["label"] == "Widgets"
+    assert data["position"] == original_position
+    assert data["link"] == {"type": "doc", "id": "widgets/index"}
+    child = project.create_doc("child", title="Child", rel_dir=container)
+    assert child.position == 2
+
+
+def test_ensure_container_is_idempotent(project):
+    entry = project.create_doc("guide", title="Guide")
+    container = project.ensure_container(entry)
+    index = project.find(project.docs_dir / "guide" / "index.mdx")
+    assert index is not None
+    assert project.ensure_container(index) == container

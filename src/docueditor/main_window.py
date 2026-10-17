@@ -233,6 +233,7 @@ class MainWindow(QMainWindow):
         self.file_tree.deleteRequested.connect(self.delete_document)
         self.file_tree.moveRequested.connect(self.move_document)
         self.file_tree.dropRequested.connect(self.handle_drop_move)
+        self.file_tree.newChildDocumentRequested.connect(self.new_child_document)
         self.file_tree.revealRequested.connect(self.reveal_document)
         self.file_tree.refreshRequested.connect(self.refresh_tree)
         self.front_matter_panel.applyRequested.connect(self.apply_front_matter)
@@ -291,7 +292,7 @@ class MainWindow(QMainWindow):
         self.center_stack.setCurrentWidget(self.empty_page)
         self.front_matter_panel.set_document(None)
         self.config_panel.set_project(project)
-        self.file_tree.set_entries(project.entries)
+        self.file_tree.set_tree(project.sidebar_tree())
         self._set_project_enabled(True)
         self.status_project.setText(str(project.root))
         self.setWindowTitle(f"{project.name} — Docueditor")
@@ -422,35 +423,99 @@ class MainWindow(QMainWindow):
             self.front_matter_panel.set_document(updated)
         self.statusBar().showMessage(f"{updated.rel} → sidebar_position {updated.position}", 4000)
 
-    def handle_drop_move(self, source_rel: str, target_dir: str, index: int) -> None:
-        """Handle a tree drag: move the file and renumber sidebar positions."""
+    def handle_drop_move(
+        self,
+        source_kind: str,
+        source_rel: str,
+        target_parent: str,
+        index: int,
+        container_doc: str,
+    ) -> None:
+        """Handle a drag: move files and renumber document/folder positions."""
         project = self._require_project()
-        if project is None:
+        if project is None or project.docs_dir is None:
             return
-        entry = next((item for item in project.entries if item.rel == source_rel), None)
-        if entry is None:
-            return
+        source_entry = (
+            next((item for item in project.entries if item.rel == source_rel), None)
+            if source_kind == "doc"
+            else None
+        )
+        source_path = (
+            source_entry.path if source_entry is not None else project.docs_dir / source_rel
+        )
         if not self._maybe_save():
             return
         try:
-            updated = project.move_document(entry, target_dir, index)
+            if container_doc:
+                target_entry = next(
+                    (item for item in project.entries if item.rel == container_doc), None
+                )
+                if target_entry is None:
+                    return
+                was_target_current = (
+                    self.current_entry is not None
+                    and self.current_entry.path == target_entry.path
+                )
+                container = project.ensure_container(target_entry)
+                if was_target_current:
+                    self._refresh_after_change()
+                    self.open_document(f"{container}/index.mdx")
+                target_parent = container
+                index = 10**9
+            _, new_rel = project.move_node(source_kind, source_rel, target_parent, index)
         except (ProjectError, OSError) as exc:
             QMessageBox.critical(self, "移动失败", str(exc))
             self.refresh_tree()
             return
+        was_current = (
+            self.current_entry is not None
+            and self.current_entry.path == source_path
+        )
         self._refresh_after_change()
-        self.file_tree.select(updated.rel)
-        if self.current_entry is not None:
+        self.file_tree.select(new_rel)
+        if was_current:
+            self.open_document(new_rel)
+        elif self.current_entry is not None:
             refreshed = project.find(self.current_entry.path)
             if refreshed is not None:
                 self.current_entry = refreshed
                 self.front_matter_panel.set_document(refreshed)
-        if self.current_entry is not None and self.current_entry.path == updated.path:
-            self.current_entry = updated
-            self.front_matter_panel.set_document(updated)
-        self.statusBar().showMessage(
-            f"已移动 {updated.rel} → sidebar_position {updated.position}", 4000
+        self.statusBar().showMessage(f"已移动 {new_rel}", 4000)
+
+    def new_child_document(self, rel: str) -> None:
+        """Create a child document, turning the parent into a folder if needed."""
+        project = self._require_project()
+        if project is None:
+            return
+        entry = next((item for item in project.entries if item.rel == rel), None)
+        if entry is None:
+            return
+        if not self._maybe_save():
+            return
+        was_current = (
+            self.current_entry is not None and self.current_entry.path == entry.path
         )
+        try:
+            container = project.ensure_container(entry)
+        except (ProjectError, OSError) as exc:
+            QMessageBox.critical(self, "创建子文档失败", str(exc))
+            return
+        self._refresh_after_change()
+        if was_current:
+            self.open_document(f"{container}/index.mdx")
+        title, ok = QInputDialog.getText(self, "新建子文档", "文档标题：")
+        if not ok or not title.strip():
+            return
+        try:
+            child = project.create_doc(
+                title.strip(), title=title.strip(), rel_dir=container
+            )
+        except (ProjectError, OSError) as exc:
+            QMessageBox.critical(self, "创建子文档失败", str(exc))
+            return
+        self._refresh_after_change()
+        self.open_document(child.rel)
+        self.statusBar().showMessage(f"已创建 {child.rel}", 4000)
 
     def reveal_document(self, rel: str) -> None:
         project = self._require_project()
@@ -467,7 +532,7 @@ class MainWindow(QMainWindow):
         if self.project is None:
             return
         self.project.scan()
-        self.file_tree.set_entries(self.project.entries)
+        self.file_tree.set_tree(self.project.sidebar_tree())
         if self.current_entry is not None:
             self.file_tree.select(self.current_entry.rel)
 
@@ -475,7 +540,7 @@ class MainWindow(QMainWindow):
         if self.project is None:
             return
         self.project.scan()
-        self.file_tree.set_entries(self.project.entries)
+        self.file_tree.set_tree(self.project.sidebar_tree())
 
     # ------------------------------------------------------------------ save
     def _panel_overrides(self) -> dict[str, object]:
@@ -510,7 +575,7 @@ class MainWindow(QMainWindow):
         self.editor.clear_front_matter_overrides()
         self.front_matter_panel.set_document(entry)
         self.project.scan()
-        self.file_tree.set_entries(self.project.entries)
+        self.file_tree.set_tree(self.project.sidebar_tree())
         self.file_tree.select(entry.rel)
         self.setWindowTitle(f"{entry.rel} — {self.project.name} — Docueditor")
         self.statusBar().showMessage(f"已保存 {entry.rel}", 3000)
@@ -562,7 +627,7 @@ class MainWindow(QMainWindow):
         if self.project is None:
             return
         self.project.scan()
-        self.file_tree.set_entries(self.project.entries)
+        self.file_tree.set_tree(self.project.sidebar_tree())
         message = f"导入完成：新建 {len(result.created)} 篇，覆盖 {len(result.overwritten)} 篇"
         self.statusBar().showMessage(message, 8000)
         QMessageBox.information(self, "导入完成", message)
