@@ -8,14 +8,14 @@ version = "0.1.0"
 description = "A WYSIWYG desktop editor for Docusaurus documentation, with Novelwriter and Yuque importers."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "GPL-3.0-only" }
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [{ name = "avis-illusio" }]
 keywords = ["docusaurus", "markdown", "mdx", "editor", "pyside6", "qt", "wysiwyg"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: X11 Applications :: Qt",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
