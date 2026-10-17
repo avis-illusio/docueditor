@@ -17,7 +17,8 @@ ONEFILE = os.environ.get("DOCUEDITOR_ONEFILE", "0") == "1"
 if sys.platform == "win32":
     ICON = ROOT / "packaging" / "icons" / "docueditor.ico"
 elif sys.platform == "darwin":
-    ICON = ROOT / "packaging" / "icons" / "docueditor.icns"
+    # PyInstaller converts PNG to .icns when Pillow is available (installed in CI).
+    ICON = ROOT / "packaging" / "icons" / "docueditor-512.png"
 else:
     ICON = None
 ICON_PATH = str(ICON) if ICON is not None and ICON.exists() else None
