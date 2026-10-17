@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Qt
+*.qm
+.qm/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local scratch
+/tmp/
+*.bak
+
+# Local scratch / install caches
+.tmp/
+.pip-cache/
