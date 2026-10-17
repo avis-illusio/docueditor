@@ -77,7 +77,7 @@ def plan_import(
     if project.docs_dir is None:
         raise ValueError("项目尚未加载")
     existing = {entry.rel for entry in project.entries}
-    next_position = project.next_position()
+    next_positions: dict[str, int] = {}
     planned: list[PlannedFile] = []
     used: set[str] = set()
     for item in plan.items:
@@ -95,9 +95,13 @@ def plan_import(
                     f"{rel_dir}/{candidate.name}" if rel_dir else candidate.name
                 )
         used.add(rel)
-        position = item.position if item.position is not None else next_position
-        if item.position is None:
-            next_position += 1
+        if item.position is not None:
+            position = item.position
+        else:
+            if rel_dir not in next_positions:
+                next_positions[rel_dir] = project.next_position(rel_dir)
+            position = next_positions[rel_dir]
+            next_positions[rel_dir] += 1
         planned.append(
             PlannedFile(
                 rel=rel,

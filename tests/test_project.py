@@ -227,3 +227,14 @@ def test_ensure_container_is_idempotent(project):
     index = project.find(project.docs_dir / "guide" / "index.mdx")
     assert index is not None
     assert project.ensure_container(index) == container
+
+
+def test_move_index_document_updates_category_link(project):
+    entry = project.create_doc("guide", title="Guide")
+    container = project.ensure_container(entry)
+    index_rel = f"{container}/index.mdx"
+    project.move_node("doc", index_rel, "other", 0)
+    data = json.loads(
+        (project.docs_dir / "guide" / "_category_.json").read_text(encoding="utf-8")
+    )
+    assert data["link"]["id"] == "other/index"

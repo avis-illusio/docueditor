@@ -459,6 +459,26 @@ class DocusaurusProject:
                     self.set_dir_position(directory, position)
         self.scan()
 
+    def _update_category_link(
+        self, parent_rel: str, old_id: str, new_id: str
+    ) -> None:
+        """Point a folder's category link at the moved index document."""
+        if self.docs_dir is None:
+            return
+        directory = self.docs_dir / parent_rel if parent_rel else self.docs_dir
+        category = directory / "_category_.json"
+        if not category.is_file():
+            return
+        data = self._category_data(directory)
+        link = data.get("link")
+        if (
+            isinstance(link, dict)
+            and link.get("type") == "doc"
+            and link.get("id") == old_id
+        ):
+            link["id"] = new_id
+            write_text(category, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
     def _rewrite_category_links(
         self, root: Path, old_prefix: str, new_prefix: str
     ) -> None:
@@ -535,6 +555,12 @@ class DocusaurusProject:
                     new_path,
                     rel,
                     relative_posix(new_path, self.docs_dir),
+                )
+            elif source_path.stem.lower() == "index":
+                self._update_category_link(
+                    source_parent,
+                    relative_posix(source_path.with_suffix(""), self.docs_dir),
+                    relative_posix(new_path.with_suffix(""), self.docs_dir),
                 )
 
         new_rel = relative_posix(new_path, self.docs_dir)
