@@ -151,8 +151,8 @@ def test_drop_on_document_creates_container(qapp, project):
     window._refresh_after_change()
     window.handle_drop_move("doc", source.rel, "", 0, target.rel)
     assert (project.docs_dir / "target" / "index.mdx").is_file()
-    assert (project.docs_dir / "target" / "source.md").is_file()
-    assert not (project.docs_dir / "target.md").exists()
+    assert (project.docs_dir / "target" / "source.mdx").is_file()
+    assert not (project.docs_dir / "target.mdx").exists()
     assert window.current_entry is not None
     window.deleteLater()
 
@@ -168,7 +168,7 @@ def test_new_child_document_turns_parent_into_folder(qapp, project, monkeypatch)
     )
     window.new_child_document(parent.rel)
     assert (project.docs_dir / "parent" / "index.mdx").is_file()
-    assert (project.docs_dir / "parent" / "child.md").is_file()
+    assert (project.docs_dir / "parent" / "child.mdx").is_file()
     window.deleteLater()
 
 
@@ -191,4 +191,16 @@ def test_container_node_opens_index(qapp, project):
     assert window.current_entry is not None
     assert window.current_entry.rel == "b/index.mdx"
     assert window.file_tree.tree.currentItem().data(0, ROLE_REL) == "b"
+    window.deleteLater()
+
+
+def test_input_method_menu_present(qapp, project):
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        pytest.skip("input method menu is Linux-only")
+    window = MainWindow()
+    window._load_project(project)
+    assert set(window.im_actions) == {"auto", "fcitx5", "ibus", "none"}
+    assert window.im_status_action.text().startswith("当前：")
     window.deleteLater()

@@ -349,7 +349,7 @@ class DocusaurusProject:
             raise ProjectError("项目尚未加载")
         suffix = Path(name).suffix.lower()
         if suffix not in DOC_SUFFIXES:
-            suffix = ".md"
+            suffix = ".mdx"
         stem = Path(name).stem if Path(name).suffix.lower() in DOC_SUFFIXES else name
         stem = slugify(stem, fallback="untitled")
         directory = (self.docs_dir / rel_dir).resolve() if rel_dir else self.docs_dir

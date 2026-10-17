@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import input_method
 from .project import DocusaurusProject, DocEntry, ProjectError, scaffold_project
 from .utils import read_text
 from .widgets.config_panel import ConfigPanel
@@ -36,6 +38,7 @@ class MainWindow(QMainWindow):
         self.project: DocusaurusProject | None = None
         self.current_entry: DocEntry | None = None
         self._settings = QSettings("avis-illusio", "docueditor")
+        self.im_status = input_method.current_status()
         self.setWindowTitle("Docueditor")
         self.resize(1280, 820)
 
@@ -169,6 +172,9 @@ class MainWindow(QMainWindow):
             action.triggered.connect(slot)
             edit_menu.addAction(action)
 
+        if sys.platform.startswith("linux"):
+            self._build_input_method_menu(edit_menu)
+
         view_menu = menu.addMenu("视图")
         view_menu.addAction(self.action_source_mode)
         view_menu.addAction(self.action_refresh)
@@ -181,6 +187,58 @@ class MainWindow(QMainWindow):
 
         help_menu = menu.addMenu("帮助")
         help_menu.addAction(self.action_about)
+
+    def _build_input_method_menu(self, parent_menu) -> None:
+        im_menu = parent_menu.addMenu("输入法")
+        self.im_group = QActionGroup(self)
+        self.im_group.setExclusive(True)
+        self.im_actions: dict[str, QAction] = {}
+        for value, label in (
+            ("auto", "自动检测（fcitx5 / IBus）"),
+            ("fcitx5", "fcitx5"),
+            ("ibus", "IBus"),
+            ("none", "关闭输入法模块"),
+        ):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setData(value)
+            action.triggered.connect(
+                lambda _checked=False, choice=value: self._set_input_method(choice)
+            )
+            self.im_group.addAction(action)
+            im_menu.addAction(action)
+            self.im_actions[value] = action
+        im_menu.addSeparator()
+        self.im_status_action = QAction("", self)
+        self.im_status_action.setEnabled(False)
+        im_menu.addAction(self.im_status_action)
+        hint = QAction("切换后需重启 Docueditor 生效", self)
+        hint.setEnabled(False)
+        im_menu.addAction(hint)
+        self._refresh_input_method_menu()
+
+    def _refresh_input_method_menu(self) -> None:
+        if not hasattr(self, "im_actions"):
+            return
+        status = input_method.current_status()
+        choice = status.requested if status.requested in self.im_actions else "auto"
+        self.im_actions[choice].setChecked(True)
+        module = status.module or "未启用"
+        if status.module and not status.plugin_available:
+            text = f"当前：{module}（未找到 Qt 插件，请安装 fcitx5-qt）"
+        else:
+            text = f"当前：{module}（QT_IM_MODULE={status.module or '—'}）"
+        self.im_status_action.setText(text)
+
+    def _set_input_method(self, choice: str) -> None:
+        self._settings.setValue("inputMethod", choice)
+        self._refresh_input_method_menu()
+        QMessageBox.information(
+            self,
+            "输入法",
+            f"已设置为「{choice}」，重启 Docueditor 后生效。\n"
+            "如果 fcitx5 无法输入中文，请确认已安装 fcitx5-qt（Qt6 前端）。",
+        )
 
     def _edit_undo(self) -> None:
         self._active_edit_widget().undo()

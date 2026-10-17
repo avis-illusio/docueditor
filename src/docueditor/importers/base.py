@@ -28,7 +28,7 @@ class ImportItem:
     extras: dict[str, object] = field(default_factory=dict)
 
     def filename(self) -> str:
-        return f"{slugify(self.title, fallback='untitled')}.md"
+        return f"{slugify(self.title, fallback='untitled')}.mdx"
 
 
 @dataclass
@@ -84,13 +84,13 @@ def plan_import(
         rel_dir = _safe_rel_dir(item.rel_dir)
         directory = project.docs_dir / rel_dir if rel_dir else project.docs_dir
         stem = slugify(item.title, fallback="untitled")
-        rel = f"{rel_dir}/{stem}.md" if rel_dir else f"{stem}.md"
+        rel = f"{rel_dir}/{stem}.mdx" if rel_dir else f"{stem}.mdx"
         action = "create"
         if rel in existing or rel in used:
             if mode == REPLACE:
                 action = "overwrite"
             else:
-                candidate = unique_path(directory, stem, ".md")
+                candidate = unique_path(directory, stem, ".mdx")
                 rel = (
                     f"{rel_dir}/{candidate.name}" if rel_dir else candidate.name
                 )

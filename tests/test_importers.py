@@ -112,13 +112,13 @@ def test_append_mode_never_overwrites(project):
         items=[base.ImportItem(title="Guide", body="imported")],
     )
     planned = base.plan_import(project, plan, base.APPEND)
-    assert planned[0].rel == "guide-2.md"
+    assert planned[0].rel == "guide-2.mdx"
     assert planned[0].action == "create"
     assert planned[0].position == project.max_position() + 1
     result = base.execute_import(project, plan, base.APPEND)
-    assert result.created == ["guide-2.md"]
+    assert result.created == ["guide-2.mdx"]
     assert "original" in existing.path.read_text(encoding="utf-8")
-    new_file = project.docs_dir / "guide-2.md"
+    new_file = project.docs_dir / "guide-2.mdx"
     assert "imported" in new_file.read_text(encoding="utf-8")
 
 
@@ -130,12 +130,12 @@ def test_replace_mode_backs_up(project):
         items=[base.ImportItem(title="Guide", body="replacement")],
     )
     result = base.execute_import(project, plan, base.REPLACE)
-    assert result.overwritten == ["guide.md"]
+    assert result.overwritten == ["guide.mdx"]
     assert result.backup_root is not None
-    backup = result.backup_root / "guide.md"
+    backup = result.backup_root / "guide.mdx"
     assert backup.is_file()
     assert "original" in backup.read_text(encoding="utf-8")
-    assert "replacement" in (project.docs_dir / "guide.md").read_text(encoding="utf-8")
+    assert "replacement" in (project.docs_dir / "guide.mdx").read_text(encoding="utf-8")
 
 
 def test_imported_documents_have_front_matter(project):
@@ -145,7 +145,7 @@ def test_imported_documents_have_front_matter(project):
         items=[base.ImportItem(title="设置", body="# 设置\n\n内容", rel_dir="guide")],
     )
     base.execute_import(project, plan)
-    path = project.docs_dir / "guide" / "设置.md"
+    path = project.docs_dir / "guide" / "设置.mdx"
     text = path.read_text(encoding="utf-8")
     assert text.startswith("---\n")
     assert "title: 设置" in text

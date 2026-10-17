@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from . import APP_NAME, __version__
+from .input_method import configure
 from .main_window import MainWindow
 from .project import DocusaurusProject, ProjectError
 
@@ -36,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     if "--version" in arguments:
         print(f"{APP_NAME} {__version__}")
         return 0
+
+    # Must happen before QApplication: Qt reads QT_IM_MODULE and the plugin
+    # path only once while constructing the platform integration.
+    arguments, _im_status = configure(arguments)
 
     app = QApplication(arguments)
     app.setApplicationName(APP_NAME)

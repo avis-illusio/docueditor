@@ -26,7 +26,7 @@ def test_scaffold_refuses_existing_project(project: DocusaurusProject):
 
 def test_create_doc_keeps_cjk_names_and_positions(project: DocusaurusProject):
     entry = project.create_doc("中文标题 测试", body="内容", title="中文标题 测试")
-    assert entry.path.name == "中文标题-测试.md"
+    assert entry.path.name == "中文标题-测试.mdx"
     assert entry.position == project.max_position()
     assert "sidebar_position" in entry.front_matter.values
     assert "内容" in entry.body
@@ -37,13 +37,13 @@ def test_create_doc_keeps_cjk_names_and_positions(project: DocusaurusProject):
 def test_create_doc_deduplicates(project: DocusaurusProject):
     first = project.create_doc("guide", title="Guide")
     second = project.create_doc("guide", title="Guide")
-    assert first.rel == "guide.md"
-    assert second.rel == "guide-2.md"
+    assert first.rel == "guide.mdx"
+    assert second.rel == "guide-2.mdx"
 
 
 def test_create_doc_in_subdirectory(project: DocusaurusProject):
     entry = project.create_doc("setup", title="Setup", rel_dir="getting-started")
-    assert entry.rel == "getting-started/setup.md"
+    assert entry.rel == "getting-started/setup.mdx"
     assert entry.path.parent.name == "getting-started"
 
 
@@ -89,7 +89,7 @@ def test_delete_removes_empty_directory(project: DocusaurusProject):
 def test_rename_document(project: DocusaurusProject):
     entry = project.create_doc("old-name", title="Old")
     renamed = project.rename_doc(entry, "new-name")
-    assert renamed.rel == "new-name.md"
+    assert renamed.rel == "new-name.mdx"
     assert not entry.path.exists()
 
 
@@ -124,10 +124,10 @@ def test_move_document_index_adjustment(project):
 def test_move_document_across_directories(project):
     entry = project.create_doc("setup", title="Setup")
     moved = project.move_document(entry, "guide", 0)
-    assert moved.rel == "guide/setup.md"
+    assert moved.rel == "guide/setup.mdx"
     assert moved.path.is_file()
     assert moved.position == 1
-    assert not (project.docs_dir / "setup.md").exists()
+    assert not (project.docs_dir / "setup.mdx").exists()
     # The source directory is renumbered too.
     assert [item.position for item in project.entries if "/" not in item.rel] == [1]
 
@@ -135,10 +135,10 @@ def test_move_document_across_directories(project):
 def test_move_document_to_root(project):
     entry = project.create_doc("deep", title="Deep", rel_dir="guide")
     moved = project.move_document(entry, "", project.max_position())
-    assert moved.rel == "deep.md"
+    assert moved.rel == "deep.mdx"
     assert moved.path.is_file()
-    assert not (project.docs_dir / "guide" / "deep.md").exists()
-    assert [item.rel for item in project.entries] == ["intro.md", "deep.md"]
+    assert not (project.docs_dir / "guide" / "deep.mdx").exists()
+    assert [item.rel for item in project.entries] == ["intro.md", "deep.mdx"]
 
 
 import json
@@ -169,7 +169,7 @@ def test_move_folder_into_another_folder(project):
     kind, new_rel = project.move_node("dir", "alpha", "beta", 1)
     assert kind == "dir"
     assert new_rel == "beta/alpha"
-    assert (project.docs_dir / "beta" / "alpha" / "x.md").is_file()
+    assert (project.docs_dir / "beta" / "alpha" / "x.mdx").is_file()
     assert not (project.docs_dir / "alpha").exists()
     beta = next(node for node in project.sidebar_tree() if node.rel == "beta")
     assert beta.position == 2
@@ -251,7 +251,7 @@ def test_sidebar_tree_marks_document_container(project):
     assert node.index_rel == "b/index.mdx"
     assert node.label == "文档 B"
     assert [item.label for item in node.children] == ["文档 A"]
-    assert node.children[0].rel == "b/a.md"
+    assert node.children[0].rel == "b/a.mdx"
 
 
 def test_move_inside_container_keeps_index_first(project):
@@ -259,7 +259,7 @@ def test_move_inside_container_keeps_index_first(project):
     project.ensure_container(parent)
     project.create_doc("a", title="A", rel_dir="b")
     project.create_doc("c", title="C", rel_dir="b")
-    project.move_node("doc", "b/a.md", "b", 1)
+    project.move_node("doc", "b/a.mdx", "b", 1)
     node = next(n for n in project.sidebar_tree() if n.rel == "b")
     assert [item.label for item in node.children] == ["C", "A"]
     positions = {
@@ -267,4 +267,4 @@ def test_move_inside_container_keeps_index_first(project):
         for entry in project.entries
         if entry.rel.startswith("b/")
     }
-    assert positions == {"b/index.mdx": 1, "b/c.md": 2, "b/a.md": 3}
+    assert positions == {"b/index.mdx": 1, "b/c.mdx": 2, "b/a.mdx": 3}

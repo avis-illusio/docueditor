@@ -28,11 +28,12 @@ Docusaurus 的 Markdown / MDX 文档时获得 **WYSIWYG（所见即所得）** �
 | 源码模式 | `Ctrl+E` 在富文本与 Markdown 源码之间切换，适合处理复杂 MDX |
 | MDX 安全保护 | `import` / `export`、JSX 组件块、`:::` 指令、围栏代码块、Markdown 表格以占位符形式保留，保存时原样写回，不会被富文本转换吃掉 |
 | Front Matter 面板 | 可视化编辑 `title`、`id`、`sidebar_position`、`tags`、`draft` 等常用字段 |
-| 文件管理 | 新建、重命名、删除文档，自动维护唯一的文件名与侧边栏序号 |
+| 文件管理 | 新建、重命名、删除文档；新建默认 `.mdx`，自动维护唯一文件名与侧边栏序号 |
 | 拖拽排序 | 文档与目录共用一套 position 排序，均可拖动；拖到文档中心会把它变成“文档节点 + 子页面” |
 | 目录与子文档 | 文档转容器后树中仍显示为文档（可点击打开 index），普通文件夹显示为文件夹；`_category_.json` 记录 position 与页面链接 |
 | 直链页面 | 转换时 index.mdx 自动写入原路径的 slug，`_category_.json` 的 link 指向它，URL 保持不变 |
 | 清爽文件树 | 不再显示 `01 ·` 序号前缀，顺序完全由 position 决定 |
+| 中文输入法 | Linux 下自动识别 fcitx5 / IBus，设置 `QT_IM_MODULE` 并加载系统 Qt6 插件；`编辑 → 输入法` 可切换 |
 | 项目配置 | 直接修改 `docusaurus.config.js` 中的 `title`、`tagline`、`url`、`baseUrl`、组织与项目名等字段（文本级安全改写，保留注释与格式） |
 | 导入 Novelwriter | 解析 `.nwd` 项目（`nwProject.nwx` + `content/`），按书目顺序与层级生成文档树 |
 | 导入语雀 | 支持语雀导出的 Markdown 文件夹 / ZIP / 单文件合集，转换表格、图片与语雀专有标签 |
@@ -93,14 +94,40 @@ docueditor /path/to/docusaurus-site
 python -m docueditor /path/to/docusaurus-site
 ```
 
+### 中文输入法（Linux）
+
+Docueditor 启动时会：
+
+1. 尊重已有的 `QT_IM_MODULE`；未设置时按运行中的 fcitx5 / IBus 自动选择（fcitx5 优先）；
+2. 从系统 Qt6 插件目录生成一个只含输入法插件的临时 overlay，并加入 `QT_PLUGIN_PATH`，让 PySide6 自带的 Qt 也能加载系统的 fcitx5 插件；
+3. 在 `编辑 → 输入法` 显示当前模块与插件状态，可切换自动 / fcitx5 / IBus / 关闭（重启生效）。
+
+需要安装 Qt6 输入法前端（Qt 插件由系统提供，应用不内置）：
+
+- Arch：`sudo pacman -S fcitx5-qt`
+- Debian / Ubuntu：`sudo apt install fcitx5-frontend-qt6`
+- Fedora：`sudo dnf install fcitx5-qt`
+- IBus：PySide6 已内置 IBus 插件，一般无需额外安装
+
+命令行覆盖：
+
+```bash
+docueditor --im fcitx5 /path/to/docusaurus-site
+DOCUEDITOR_IM=ibus docueditor
+docueditor --im none            # 关闭输入法模块
+```
+
+AppImage 与 PyInstaller 包不内置输入法插件，运行时从系统加载，请先安装上面的 fcitx5-qt。
+
 ## 基本用法
 
 1. **打开项目**：`文件 → 打开 Docusaurus 项目`，选择包含 `docusaurus.config.js` 的目录。
 2. **编辑文档**：左侧文件树选择文档，中间区域直接编辑。工具栏提供标题、粗体、斜体、列表、引用、代码与链接。
-3. **保存**：`Ctrl+S`。Front Matter 与正文一起写回 `.md` / `.mdx`。
+3. **保存**：`Ctrl+S`。Front Matter 与正文一起写回；新建文档默认使用 `.mdx`。
 4. **调整顺序**：直接拖动文档或目录到目标位置；拖到文档中心会把它变成“可展开的文档节点”，子页面缩进显示，父节点仍可点击打开（语雀式）。`sidebar_position` 与 `_category_.json` 的 `position` 会自动重排。
 5. **创建子文档**：右键父文档 →「在此文档下新建子文档…」。底层自动变成 `同名目录/index.mdx` + `_category_.json`，但树里仍显示为原来的文档；普通文件夹仍显示为文件夹。
-6. **导入**：`文件 → 导入…`，选择 Novelwriter 或语雀，先看预览，再点“执行导入”。
+6. **导入**：`文件 → 导入…`，选择 Novelwriter 或语雀，先看预览，再点“执行导入”（生成 `.mdx`）。
+7. **输入法（Linux）**：启动时自动识别 fcitx5/IBus；也可在 `编辑 → 输入法` 切换，或用 `--im fcitx5` / `DOCUEDITOR_IM` 覆盖（重启生效）。
 
 ## 导入说明
 
@@ -211,6 +238,8 @@ macOS arm64 `.dmg`，并附加到对应的 GitHub Release。
 - 不内置 Docusaurus 预览服务器，可在项目目录自行运行 `npm run start`。
 - 目录移动后会更新 `_category_.json` 里的 `link.id`；文档 front matter 中手写的绝对 `slug` 不会自动改写。
 - 文档转容器时，磁盘上的目录名仍是原文件名（如 `guide/`），树和 Docusaurus 侧边栏显示的是文档标题 / `_category_.json` 的 label；这样不会破坏已有 URL。
+- 新建文档默认 `.mdx`；已有的 `.md` 文档照常编辑。
+- 中文输入法依赖系统 Qt6 插件（fcitx5-qt）；应用负责设置模块与插件路径，不内置输入法引擎。
 - 目录的重命名与删除暂未提供（可先在文件管理器中操作）。
 
 ## 路线图
