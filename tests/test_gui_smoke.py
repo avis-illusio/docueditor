@@ -402,9 +402,6 @@ def test_hr_line_double_click_edit(qapp, tmp_path):
     editor.deleteLater()
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11), reason="PySide6 6.12/QTextTable teardown on 3.10"
-)
 def test_table_editing_actions(qapp, tmp_path):
     editor = MarkdownEditor()
     editor.load_document(tmp_path / "x.mdx", "")
