@@ -196,7 +196,14 @@ QTabBar::tab:selected {
     font-weight: 600;
 }
 
-QTextEdit,
+QTextEdit {
+    border: none;
+    border-radius: 0;
+    padding: 30px 48px;
+    font-size: 14px;
+    background: #ffffff;
+}
+
 QPlainTextEdit {
     border: none;
     border-radius: 0;

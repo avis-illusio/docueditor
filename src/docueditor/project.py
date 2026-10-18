@@ -461,7 +461,9 @@ class DocusaurusProject:
         write_text(path, text if text.endswith("\n") else text + "\n")
         return self._read_and_register(path)
 
-    def create_folder(self, name: str, parent_rel: str = "") -> DirEntry:
+    def create_folder(
+        self, name: str, label: str | None = None, parent_rel: str = ""
+    ) -> DirEntry:
         """Create a folder with ``_category_.json`` (label + same-level position)."""
         if self.docs_dir is None:
             raise ProjectError("项目尚未加载")
@@ -476,9 +478,9 @@ class DocusaurusProject:
         if folder_path.exists():
             folder_path = unique_path(parent_path, folder_name, "")
         folder_path.mkdir()
-        label = name.strip() or folder_name
+        sidebar_label = (label or name).strip() or folder_name
         data = {
-            "label": label,
+            "label": sidebar_label,
             "position": self.next_position(parent_rel),
         }
         write_text(

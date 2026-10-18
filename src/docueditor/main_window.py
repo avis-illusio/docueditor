@@ -32,6 +32,7 @@ from .widgets.file_tree import FileTree
 from .widgets.frontmatter_panel import FrontMatterPanel
 from .widgets.import_dialog import ImportDialog
 from .widgets.new_document_dialog import NewDocumentDialog
+from .widgets.new_folder_dialog import NewFolderDialog
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -436,11 +437,12 @@ class MainWindow(QMainWindow):
             return
         if not rel_dir:
             rel_dir = self.file_tree.selected_dir()
-        name, ok = QInputDialog.getText(self, "新建文件夹", "文件夹名称：")
-        if not ok or not name.strip():
+        values = NewFolderDialog.ask(self, rel_dir or "docs")
+        if values is None:
             return
+        name, title = values
         try:
-            directory = project.create_folder(name.strip(), rel_dir)
+            directory = project.create_folder(name, label=title, parent_rel=rel_dir)
         except (ProjectError, OSError) as exc:
             QMessageBox.critical(self, "新建文件夹失败", str(exc))
             return

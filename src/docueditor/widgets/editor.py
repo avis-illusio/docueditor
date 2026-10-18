@@ -12,9 +12,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import (
+    QColor,
     QFont,
+    QKeyEvent,
     QKeySequence,
     QShortcut,
     QTextBlock,
@@ -23,6 +25,7 @@ from PySide6.QtGui import (
     QTextCursor,
     QTextDocument,
     QTextFormat,
+    QTextFrameFormat,
     QTextImageFormat,
     QTextLength,
     QTextListFormat,
@@ -107,6 +110,7 @@ class MarkdownEditor(QWidget):
         layout.addWidget(self.hint)
         layout.addWidget(self.stack, 1)
 
+        self.text_edit.installEventFilter(self)
         self.text_edit.textChanged.connect(self._on_changed)
         self.source_edit.textChanged.connect(self._on_changed)
         self.text_edit.document().modificationChanged.connect(self._emit_modified)
@@ -198,6 +202,7 @@ class MarkdownEditor(QWidget):
         body = self._prepare_body(self._front_matter)
         self._protected = mdx_guard.protect(body)
         self.text_edit.document().setMarkdown(self._protected.text, _feature_markdown())
+        self._apply_typography()
         self.source_edit.setPlainText(text if text.endswith("\n") else text + "\n")
         self.text_edit.document().setModified(False)
         self.source_edit.document().setModified(False)
@@ -248,6 +253,7 @@ class MarkdownEditor(QWidget):
         markdown = self.text_edit.document().toMarkdown(_feature_markdown())
         restored = mdx_guard.restore(markdown, self._protected)
         restored = self._replace_tables(restored)
+        restored = self._normalize_horizontal_rules(restored)
         overrides = dict(self._pending_overrides)
         if self._injected_title:
             match = re.match(r"^#\s+(.+?)\s*\n+", restored)
@@ -348,6 +354,26 @@ class MarkdownEditor(QWidget):
             lines[begin:end] = [replacement]
         return "".join(lines)
 
+    @staticmethod
+    def _normalize_horizontal_rules(markdown: str) -> str:
+        lines = markdown.splitlines(keepends=True)
+        in_fence = False
+        fence = ""
+        hr_re = re.compile(r"^[-*_](?:\s+[-*_]){2,}\s*$")
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith(("```", "~~~")):
+                marker = stripped[:3]
+                if not in_fence:
+                    in_fence = True
+                    fence = marker
+                elif stripped.startswith(fence):
+                    in_fence = False
+                continue
+            if not in_fence and hr_re.match(stripped):
+                lines[index] = "---\n" if line.endswith("\n") else "---"
+        return "".join(lines)
+
     def _prepare_body(self, parsed: frontmatter.FrontMatter) -> str:
         """Inject front matter ``title`` as a visible H1 in the WYSIWYG view."""
         title = parsed.values.get("title")
@@ -395,6 +421,7 @@ class MarkdownEditor(QWidget):
             body = self._prepare_body(self._front_matter)
             self._protected = mdx_guard.protect(body)
             self.text_edit.document().setMarkdown(self._protected.text, _feature_markdown())
+            self._apply_typography()
             self.text_edit.document().setModified(False)
             self._loading = False
             self._update_hint()
@@ -555,6 +582,211 @@ class MarkdownEditor(QWidget):
         fmt.setForeground(Qt.GlobalColor.blue)
         cursor.insertText(selected, fmt)
         self.text_edit.setFocus()
+
+    # ------------------------------------------------------------ typography
+    def _apply_typography(self) -> None:
+        document = self.text_edit.document()
+        document.setDefaultFont(QFont("Noto Sans CJK SC", 11))
+        block = document.begin()
+        while block.isValid():
+            self._style_block(block)
+            block = block.next()
+        self._style_tables()
+        try:
+            document.clearUndoRedoStacks()
+        except AttributeError:
+            pass
+
+    def _style_block(self, block: QTextBlock) -> None:
+        fmt = block.blockFormat()
+        heading = fmt.headingLevel()
+        code = fmt.property(QTextFormat.Property.BlockCodeLanguage)
+        quote = fmt.property(QTextFormat.Property.BlockQuoteLevel) or 0
+        sizes = {1: 26.0, 2: 21.0, 3: 18.0, 4: 16.0, 5: 14.0, 6: 13.0}
+        if heading:
+            fmt.setTopMargin(26 if heading == 1 else 18)
+            fmt.setBottomMargin(10)
+            fmt.setLeftMargin(0)
+            fmt.setRightMargin(0)
+            fmt.setLineHeight(130, 1)
+            size = sizes.get(heading, 13.0)
+            color = QColor("#1f2328")
+            weight = QFont.Weight.Bold
+            families = ["Noto Sans CJK SC"]
+        elif code:
+            fmt.setBackground(QColor("#f6f8fa"))
+            fmt.setLeftMargin(16)
+            fmt.setRightMargin(16)
+            fmt.setTopMargin(8)
+            fmt.setBottomMargin(8)
+            fmt.setLineHeight(145, 1)
+            size = 10.5
+            color = QColor("#24292f")
+            weight = QFont.Weight.Normal
+            families = ["JetBrains Mono", "Fira Code", "monospace"]
+        elif quote:
+            fmt.setBackground(QColor("#f6f8fa"))
+            fmt.setLeftMargin(18)
+            fmt.setRightMargin(14)
+            fmt.setTopMargin(6)
+            fmt.setBottomMargin(6)
+            fmt.setLineHeight(165, 1)
+            size = 11.5
+            color = QColor("#57606a")
+            weight = QFont.Weight.Normal
+            families = ["Noto Sans CJK SC"]
+        else:
+            fmt.clearBackground()
+            fmt.setLeftMargin(0)
+            fmt.setRightMargin(0)
+            fmt.setTopMargin(0)
+            fmt.setBottomMargin(6)
+            fmt.setLineHeight(170, 1)
+            size = 11.5
+            color = QColor("#24292f")
+            weight = QFont.Weight.Normal
+            families = ["Noto Sans CJK SC"]
+        cursor = QTextCursor(block)
+        cursor.setBlockFormat(fmt)
+        char = QTextCharFormat()
+        char.setFontPointSize(size)
+        char.setForeground(color)
+        char.setFontWeight(weight)
+        char.setFontFamilies(families)
+        if code:
+            char.setFontFixedPitch(True)
+        content = QTextCursor(block)
+        content.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        content.movePosition(
+            QTextCursor.MoveOperation.EndOfBlock,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        content.mergeCharFormat(char)
+        iterator = block.begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            if fragment.isValid() and fragment.charFormat().isAnchor():
+                link_format = QTextCharFormat()
+                link_format.setForeground(QColor("#2e8555"))
+                link_format.setFontUnderline(False)
+                link_cursor = QTextCursor(self.text_edit.document())
+                link_cursor.setPosition(fragment.position())
+                link_cursor.setPosition(
+                    fragment.position() + fragment.length(),
+                    QTextCursor.MoveMode.KeepAnchor,
+                )
+                link_cursor.mergeCharFormat(link_format)
+            iterator += 1
+
+    def _style_tables(self) -> None:
+        for table in self._collect_tables():
+            fmt = table.format()
+            fmt.setBorder(1)
+            fmt.setBorderBrush(QColor("#d0d7de"))
+            fmt.setBorderStyle(QTextFrameFormat.BorderStyle.BorderStyle_Solid)
+            fmt.setCellPadding(8)
+            fmt.setCellSpacing(0)
+            fmt.setWidth(QTextLength(QTextLength.Type.PercentageLength, 100))
+            table.setFormat(fmt)
+            for column in range(table.columns()):
+                cell = table.cellAt(0, column)
+                cell_format = cell.format()
+                cell_format.setBackground(QColor("#f6f8fa"))
+                cell_format.setFontWeight(QFont.Weight.Bold)
+                cell.setFormat(cell_format)
+
+    # --------------------------------------------------------- autoformat
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self.text_edit and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if self._autoformat_hr():
+                    return True
+            elif key == Qt.Key.Key_Space:
+                if self._autoformat_prefix():
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _autoformat_hr(self) -> bool:
+        if self._source_mode:
+            return False
+        cursor = self.text_edit.textCursor()
+        if cursor.hasSelection():
+            return False
+        if cursor.block().text().strip() not in {"---", "***", "___"}:
+            return False
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        cursor.removeSelectedText()
+        block_format = cursor.blockFormat()
+        block_format.setProperty(
+            QTextFormat.Property.BlockTrailingHorizontalRulerWidth, 1
+        )
+        cursor.setBlockFormat(block_format)
+        cursor.insertBlock()
+        cursor.setBlockFormat(QTextBlockFormat())
+        cursor.endEditBlock()
+        self._style_block(cursor.block())
+        self.text_edit.setTextCursor(cursor)
+        return True
+
+    def _autoformat_prefix(self) -> bool:
+        if self._source_mode:
+            return False
+        cursor = self.text_edit.textCursor()
+        if cursor.hasSelection():
+            return False
+        block = cursor.block()
+        offset = cursor.position() - block.position()
+        if offset <= 0:
+            return False
+        prefix = block.text()[:offset]
+        heading = re.fullmatch(r"(#{1,6})\s", prefix)
+        task = re.fullmatch(r"- \[([ xX])\]\s", prefix)
+        bullet = re.fullmatch(r"[-*+]\s", prefix)
+        ordered = re.fullmatch(r"\d+\.\s", prefix)
+        code = prefix == "```"
+        if not (heading or task or bullet or ordered or code or prefix == "> "):
+            return False
+        cursor.beginEditBlock()
+        cursor.setPosition(block.position())
+        cursor.setPosition(block.position() + len(prefix), QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+        block_format = cursor.blockFormat()
+        char_format = QTextCharFormat()
+        if heading:
+            level = len(heading.group(1))
+            block_format.setHeadingLevel(level)
+            cursor.setBlockFormat(block_format)
+            if level == 1:
+                char_format.setFontPointSize(26)
+            elif level == 2:
+                char_format.setFontPointSize(21)
+            else:
+                char_format.setFontPointSize(18)
+            char_format.setFontWeight(QFont.Weight.Bold)
+            cursor.mergeCharFormat(char_format)
+        elif prefix == "> ":
+            block_format.setProperty(QTextFormat.Property.BlockQuoteLevel, 1)
+            cursor.setBlockFormat(block_format)
+        elif code:
+            block_format.setProperty(QTextFormat.Property.BlockCodeLanguage, "text")
+            block_format.setNonBreakableLines(True)
+            cursor.setBlockFormat(block_format)
+        else:
+            list_format = QTextListFormat()
+            list_format.setIndent(1)
+            if ordered:
+                list_format.setStyle(QTextListFormat.Style.ListDecimal)
+            else:
+                list_format.setStyle(QTextListFormat.Style.ListDisc)
+            cursor.createList(list_format)
+            if task:
+                cursor.insertText(f"[{task.group(1)}] ")
+        cursor.endEditBlock()
+        self._style_block(cursor.block())
+        self.text_edit.setTextCursor(cursor)
+        return True
 
     def _selected_blocks(self) -> list[QTextBlock]:
         cursor = self._cursor()

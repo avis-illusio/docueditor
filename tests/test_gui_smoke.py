@@ -4,6 +4,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtGui import QTextCursor, QTextFormat  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from docueditor.main_window import MainWindow  # noqa: E402
@@ -276,15 +277,86 @@ def test_create_folder(qapp, project, monkeypatch):
     window = MainWindow()
     window._load_project(project)
     monkeypatch.setattr(
-        "docueditor.main_window.QInputDialog.getText",
-        staticmethod(lambda *args, **kwargs: ("指南", True)),
+        "docueditor.main_window.NewFolderDialog.ask",
+        staticmethod(lambda *args, **kwargs: ("guide", "指南")),
     )
     window.new_folder("")
-    folder = project.docs_dir / "指南"
+    folder = project.docs_dir / "guide"
     assert folder.is_dir()
     data = __import__("json").loads(
         (folder / "_category_.json").read_text(encoding="utf-8")
     )
     assert data["label"] == "指南"
-    assert window.file_tree._find_item("指南") is not None
+    assert window.file_tree._find_item("guide") is not None
     window.deleteLater()
+
+
+def test_autoformat_markdown_input(qapp, tmp_path):
+    editor = MarkdownEditor()
+    editor.load_document(tmp_path / "x.mdx", "")
+    editor.text_edit.setPlainText("---")
+    cursor = editor.text_edit.textCursor()
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    editor.text_edit.setTextCursor(cursor)
+    assert editor._autoformat_hr()
+    assert editor.current_text().strip() == "---"
+
+    editor.text_edit.clear()
+    editor.text_edit.setPlainText("# ")
+    cursor = editor.text_edit.textCursor()
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    editor.text_edit.setTextCursor(cursor)
+    assert editor._autoformat_prefix()
+    assert editor.text_edit.document().firstBlock().blockFormat().headingLevel() == 1
+    editor.text_edit.textCursor().insertText("标题")
+    assert editor.current_text().startswith("# 标题")
+
+    editor.text_edit.clear()
+    editor.text_edit.setPlainText("- [ ] ")
+    cursor = editor.text_edit.textCursor()
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    editor.text_edit.setTextCursor(cursor)
+    assert editor._autoformat_prefix()
+    assert editor.current_text().strip() == "- [ ]"
+    editor.deleteLater()
+
+
+def test_typography_applied(qapp, tmp_path):
+    editor = MarkdownEditor()
+    text = (
+        "---\ntitle: Hello\n---\n\n"
+        "## Section\n\n> quote\n\n"
+        "```python\nprint(1)\n```\n\n"
+        "| A | B |\n| --- | --- |\n| 1 | 2 |\n"
+    )
+    editor.load_document(tmp_path / "x.mdx", text)
+    document = editor.text_edit.document()
+    first = document.begin()
+    assert first.blockFormat().headingLevel() == 1
+    assert first.begin().fragment().charFormat().fontPointSize() == 26.0
+    code_size = None
+    block = first.next()
+    while block.isValid():
+        if block.blockFormat().property(
+            QTextFormat.Property.BlockCodeLanguage
+        ):
+            code_size = block.begin().fragment().charFormat().fontPointSize()
+            break
+        block = block.next()
+    assert code_size == 10.5
+    assert editor._collect_tables()[0].format().border() == 1.0
+    editor.deleteLater()
+
+
+def test_new_folder_dialog_syncs_title_to_name(qapp):
+    from docueditor.widgets.new_folder_dialog import NewFolderDialog
+
+    dialog = NewFolderDialog(None, "docs")
+    dialog.folder_edit.setText("guide")
+    assert dialog.title_edit.text() == "guide"
+    dialog.title_edit.setText("指南")
+    dialog._title_edited("指南")
+    dialog.folder_edit.setText("other")
+    assert dialog.title_edit.text() == "指南"
+    assert dialog.values() == ("other", "指南")
+    dialog.deleteLater()
