@@ -646,6 +646,16 @@ class MarkdownEditor(QWidget):
             color = QColor("#24292f")
             weight = QFont.Weight.Normal
             families = ["Noto Sans CJK SC"]
+        has_image = False
+        probe = block.begin()
+        while not probe.atEnd():
+            fragment = probe.fragment()
+            if fragment.isValid() and fragment.charFormat().isImageFormat():
+                has_image = True
+                break
+            probe += 1
+        if has_image:
+            fmt.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         cursor = QTextCursor(block)
         cursor.setBlockFormat(fmt)
         char = QTextCharFormat()
