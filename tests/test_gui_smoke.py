@@ -1,5 +1,6 @@
 import gc
 import os
+import sys
 
 import pytest
 
@@ -422,6 +423,9 @@ def test_table_editing_actions(qapp, tmp_path):
     editor.deleteLater()
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 11), reason="PySide6 6.12/QImage teardown on 3.10"
+)
 def test_paste_image_copies_to_assets(qapp, tmp_path):
     from PySide6.QtCore import QMimeData
     from PySide6.QtGui import QImage
