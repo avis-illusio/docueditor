@@ -18,6 +18,11 @@ def qapp(tmp_path_factory):
     os.environ["XDG_CONFIG_HOME"] = str(config_home)
     app = QApplication.instance() or QApplication([])
     yield app
+    for widget in app.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+    app.quit()
 
 
 @pytest.fixture()
