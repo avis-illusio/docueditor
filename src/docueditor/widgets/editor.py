@@ -1290,10 +1290,12 @@ class MarkdownEditor(QWidget):
 
     def _table_alignments(self, table: QTextTable) -> list[str]:
         raw = table.format().property(TABLE_ALIGN_PROPERTY)
-        if isinstance(raw, str):
-            values = raw.split(",")
-            if len(values) == table.columns():
-                return values
+        if isinstance(raw, int):
+            values = []
+            for column in range(table.columns()):
+                code = (raw >> (column * 2)) & 0b11
+                values.append({1: "center", 2: "right"}.get(code, "left"))
+            return values
         return ["left" for _ in range(table.columns())]
 
     def _apply_table_alignments(self) -> None:
@@ -1309,8 +1311,12 @@ class MarkdownEditor(QWidget):
     def _set_table_alignments(
         self, table: QTextTable, alignments: list[str], restyle: bool = True
     ) -> None:
+        codes = {"left": 0, "center": 1, "right": 2}
+        encoded = 0
+        for index, alignment in enumerate(alignments):
+            encoded |= codes.get(alignment, 0) << (index * 2)
         fmt = table.format()
-        fmt.setProperty(TABLE_ALIGN_PROPERTY, ",".join(alignments))
+        fmt.setProperty(TABLE_ALIGN_PROPERTY, encoded)
         table.setFormat(fmt)
         mapping = {
             "left": Qt.AlignmentFlag.AlignLeft,
