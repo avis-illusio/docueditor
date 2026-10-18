@@ -360,3 +360,96 @@ def test_new_folder_dialog_syncs_title_to_name(qapp):
     assert dialog.title_edit.text() == "指南"
     assert dialog.values() == ("other", "指南")
     dialog.deleteLater()
+
+
+def test_hr_line_double_click_edit(qapp, tmp_path):
+    editor = MarkdownEditor()
+    editor.resize(700, 500)
+    editor.show()
+    editor.load_document(tmp_path / "x.mdx", "before\n\n---\n\nafter\n")
+    qapp.processEvents()
+    document = editor.text_edit.document()
+    block = document.begin()
+    hr_block = None
+    while block.isValid():
+        if block.blockFormat().property(
+            QTextFormat.Property.BlockTrailingHorizontalRulerWidth
+        ):
+            hr_block = block
+            break
+        block = block.next()
+    assert hr_block is not None
+    point = editor.text_edit.cursorRect(QTextCursor(hr_block)).center()
+    assert editor._begin_hr_edit(point)
+    assert editor.text_edit.textCursor().block().text() == "---"
+    cursor = editor.text_edit.textCursor()
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    editor.text_edit.setTextCursor(cursor)
+    editor._maybe_finish_hr_edit()
+    assert document.findBlock(hr_block.position()).blockFormat().property(
+        QTextFormat.Property.BlockTrailingHorizontalRulerWidth
+    )
+    assert "---" in editor.current_text()
+    editor.deleteLater()
+
+
+def test_table_editing_actions(qapp, tmp_path):
+    editor = MarkdownEditor()
+    editor.load_document(tmp_path / "x.mdx", "")
+    cursor = editor.text_edit.textCursor()
+    table = cursor.insertTable(2, 2)
+    editor.text_edit.setTextCursor(cursor)
+    editor._table_insert_row(1)
+    assert table.rows() == 3
+    editor._table_insert_column(1)
+    assert table.columns() == 3
+    editor._table_equal_width()
+    assert len(table.format().columnWidthConstraints()) == 3
+    editor._table_delete_row()
+    assert table.rows() == 2
+    # Table operations may move the cursor out; re-enter before deleting a column.
+    editor.text_edit.setTextCursor(table.cellAt(0, 0).firstCursorPosition())
+    editor._table_delete_column()
+    assert table.columns() == 2
+    editor.deleteLater()
+
+
+def test_paste_image_copies_to_assets(qapp, tmp_path):
+    from PySide6.QtCore import QMimeData
+    from PySide6.QtGui import QImage
+
+    docs = tmp_path / "site" / "docs"
+    docs.mkdir(parents=True)
+    document_path = docs / "guide" / "page.mdx"
+    document_path.parent.mkdir()
+    editor = MarkdownEditor()
+    editor.set_project_context(docs)
+    editor.load_document(document_path, "")
+    image = QImage(4, 4, QImage.Format.Format_RGB32)
+    image.fill(0xFF0000)
+    mime = QMimeData()
+    mime.setImageData(image)
+    editor.text_edit.insertFromMimeData(mime)
+    assets = list((docs / "assets").glob("*.png"))
+    assert assets
+    assert "![image](../assets/" in editor.current_text()
+    editor.deleteLater()
+
+
+def test_table_alignment_roundtrip(qapp, tmp_path):
+    editor = MarkdownEditor()
+    editor.resize(700, 500)
+    editor.show()
+    editor.load_document(
+        tmp_path / "x.mdx",
+        "| A | B |\n| :--- | ---: |\n| 1 | 2 |\n",
+    )
+    qapp.processEvents()
+    assert "| --- | ---: |" in editor.current_text()
+    table = editor._collect_tables()[0]
+    editor.text_edit.setTextCursor(table.cellAt(0, 0).firstCursorPosition())
+    editor._update_table_bar()
+    assert editor.table_bar.isVisible()
+    editor._table_set_alignment("center")
+    assert "| :---: | ---: |" in editor.current_text()
+    editor.deleteLater()

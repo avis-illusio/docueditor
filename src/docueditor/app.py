@@ -6,11 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication
-
 from . import APP_NAME, __version__
 from .input_method import configure
-from .main_window import MainWindow
 from .project import DocusaurusProject, ProjectError
 
 
@@ -72,18 +69,41 @@ def load_stylesheet() -> str:
     return ""
 
 
+HELP_TEXT = f"""{APP_NAME} {__version__}
+Docusaurus 文档所见即所得编辑器
+
+用法：
+  docueditor [选项] [项目目录]
+
+选项：
+  -h, --help            显示本帮助并退出
+  --version             显示版本并退出
+  --im <auto|fcitx5|ibus|none>
+                        设置输入法模块（Linux，重启生效）
+  --im-status           打印输入法诊断信息
+  --self-test           启动后立即退出（打包自检）
+
+也可以直接打开项目：
+  docueditor /path/to/docusaurus-site
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv if argv is None else argv)
+
+    if "--help" in arguments or "-h" in arguments:
+        print(HELP_TEXT)
+        return 0
+    if "--version" in arguments:
+        print(f"{APP_NAME} {__version__}")
+        return 0
+
     if (
         os.environ.get("QT_QPA_PLATFORM") is None
         and not os.environ.get("DISPLAY")
         and not os.environ.get("WAYLAND_DISPLAY")
     ):
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
-    if "--version" in arguments:
-        print(f"{APP_NAME} {__version__}")
-        return 0
 
     _ensure_system_libstdcpp()
 
@@ -101,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"platform: {os.environ.get('QT_QPA_PLATFORM', 'auto')}")
         print(im_status.report())
         return 0
+
+    from PySide6.QtWidgets import QApplication
+
+    from .main_window import MainWindow
 
     app = QApplication(arguments)
     app.setApplicationName(APP_NAME)

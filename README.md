@@ -26,6 +26,9 @@ Docusaurus 的 Markdown / MDX 文档时获得 **WYSIWYG（所见即所得）** �
 | 打开 / 新建项目 | 识别 `docusaurus.config.{js,ts,mjs,cjs}`，自动定位 `docs/` 目录与 `sidebars.*` |
 | 所见即所得编辑 | 标题、粗体、斜体、删除线、列表、任务列表、引用、行内代码、链接、图片、表格、代码块、分隔线都在编辑器里直接呈现和编辑 |
 | Typora 风格排版 | 标题层级字号、1.7 倍行距、引用/代码块浅色底、表格边框与表头、链接配色，编辑器留白更接近 Typora |
+| 表格编辑 | 光标在表格内出现工具栏；右键或工具栏增删行列、左/中/右对齐、调整列宽、删除表格 |
+| 可编辑分割线 | 显示为横线；双击横线变成可编辑的 `---` 文本，光标移开后恢复横线 |
+| 图片粘贴 | 粘贴/拖入图片自动复制到 `docs/assets/`，插入相对路径；嵌套文档使用 `../assets/...` |
 | Markdown 输入 | 支持边写边转换：`# ` → 标题、`> ` → 引用、`- ` / `1. ` → 列表、`- [ ] ` → 任务、```` ``` ```` → 代码块、`---` + 回车 → 分隔线 |
 | 完整 Markdown | 常用 CommonMark + GitHub 方言语法均可编辑；表格使用自定义序列化，避免 Qt 导出丢列 |
 | 源码模式 | `Ctrl+E` 在富文本与 Markdown 源码之间切换，适合处理复杂 MDX |
@@ -59,6 +62,10 @@ Docusaurus 的 Markdown / MDX 文档时获得 **WYSIWYG（所见即所得）** �
 | 水平分隔线 | 工具栏「分隔线」 |
 
 输入习惯上尽量贴近 Typora：行首输入 `# `、`## `、`> `、`- `、`1. `、`- [ ] `、```` ``` ```` 会立即转换；单独输入 `---`、`***` 或 `___` 后按回车会变成分隔线，而不是被转义成 `\-\-\-`。
+
+- **分割线**：默认显示为一条横线；双击横线进入 `---` 文本编辑，光标移开或保存时自动恢复横线。
+- **表格**：把光标放进表格会出现“上方行/下方行/删行/左列/右列/删列/左中右对齐/删表”工具栏；右键菜单也有同样操作。列宽可以用“平均列宽/加宽/缩窄”调整。
+- **图片**：直接把图片粘贴或拖进编辑器，会复制到 `docs/assets/` 并插入相对路径（嵌套目录自动加 `../`）。
 
 脚注、数学公式、复杂 HTML/MDX 等扩展语法仍建议切到源码模式（`Ctrl+E`）。
 
@@ -290,6 +297,24 @@ macOS arm64 `.dmg`，并附加到对应的 GitHub Release。
 
 打包配置位于 [`packaging/`](packaging/)：PyInstaller spec、desktop 文件、nfpm 配置与图标。
 
+## 常见问题
+
+### 启动时出现大量 Fontconfig 错误
+
+终端里出现：
+
+```
+Fontconfig error: "/etc/fonts/conf.d/48-guessfamily.conf", line 19: invalid attribute 'xsi:nil'
+```
+
+这是系统 fontconfig 配置文件损坏，不是 Docueditor 的配置。`--help` / `--version` 已改为不加载 Qt，因此不会再触发；GUI 启动仍会经过 Qt/Fontconfig。可以查询并重装提供该文件的包：
+
+```bash
+pacman -Qo /etc/fonts/conf.d/48-guessfamily.conf
+# 例如重新安装 fontconfig 或对应的配置包，然后
+fc-cache -f
+```
+
 ## 已知限制
 
 - 表格会保留行列与文本，但列对齐（`:---:`）会统一导出为 `---`；
@@ -308,7 +333,7 @@ macOS arm64 `.dmg`，并附加到对应的 GitHub Release。
 
 - [x] 内置 Markdown 源码模式切换
 - [x] 代码块 / 表格 / JSX 往返保护
-- [ ] 图片粘贴自动保存到 `static/img/` 并改写链接
+- [x] 图片粘贴/拖入自动保存到 `docs/assets/` 并插入相对路径
 - [ ] 文档内链接与锚点检查
 - [ ] 导入 Notion / Obsidian
 - [x] 多平台安装包（Windows / Linux / macOS）

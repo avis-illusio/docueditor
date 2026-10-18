@@ -9,13 +9,18 @@ editing.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, Qt, QUrl, Signal
 from PySide6.QtGui import (
+    QAction,
     QColor,
     QFont,
+    QImage,
     QKeyEvent,
     QKeySequence,
     QShortcut,
@@ -38,6 +43,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QStackedWidget,
@@ -50,6 +56,8 @@ from PySide6.QtWidgets import (
 from .. import frontmatter, mdx_guard
 from ..utils import word_count
 
+TABLE_ALIGN_PROPERTY = int(QTextFormat.Property.UserProperty) + 1
+
 GITHUB_DIALECT = getattr(
     QTextDocument,
     "MarkdownDialectGitHub",
@@ -59,6 +67,46 @@ GITHUB_DIALECT = getattr(
 
 def _feature_markdown() -> int:
     return GITHUB_DIALECT
+
+
+class MarkdownTextEdit(QTextEdit):
+    """QTextEdit that routes pasted/dropped images through a handler."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.image_handler = None
+
+    @staticmethod
+    def _image_urls(source: QMimeData) -> list[QUrl]:
+        suffixes = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
+        if not source.hasUrls():
+            return []
+        return [
+            url
+            for url in source.urls()
+            if url.isLocalFile()
+            and Path(url.toLocalFile()).suffix.lower() in suffixes
+        ]
+
+    def canInsertFromMimeData(self, source: QMimeData) -> bool:  # noqa: N802
+        if self.image_handler is not None and (
+            source.hasImage() or self._image_urls(source)
+        ):
+            return True
+        return super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source: QMimeData) -> None:  # noqa: N802
+        if self.image_handler is not None:
+            path = self.image_handler(source)
+            if path:
+                image_format = QTextImageFormat()
+                image_format.setName(path)
+                image_format.setProperty(
+                    QTextFormat.Property.ImageAltText, "image"
+                )
+                self.textCursor().insertImage(image_format)
+                return
+        super().insertFromMimeData(source)
 
 
 class MarkdownEditor(QWidget):
@@ -78,11 +126,17 @@ class MarkdownEditor(QWidget):
         self._pending_overrides: dict[str, object] = {}
         self._injected_title = False
         self._injected_title_text = ""
+        self._editing_hr_pos: int | None = None
+        self._suppress_hr_finish = False
+        self._parsed_table_alignments: list[list[str]] = []
+        self._docs_dir: Path | None = None
+        self._document_dir: Path | None = None
 
-        self.text_edit = QTextEdit()
+        self.text_edit = MarkdownTextEdit()
         self.text_edit.setAcceptRichText(True)
         self.text_edit.setPlaceholderText("在这里开始书写……")
         self.text_edit.setTabChangesFocus(False)
+        self.text_edit.image_handler = self._handle_image_mime
         document = self.text_edit.document()
         document.setDefaultFont(QFont("Noto Sans CJK SC", 11))
 
@@ -98,6 +152,7 @@ class MarkdownEditor(QWidget):
         self.stack.addWidget(self.source_edit)
 
         self.toolbar = self._build_toolbar()
+        self.table_bar = self._build_table_bar()
         self.hint = QLabel("")
         self.hint.setObjectName("editorHint")
         self.hint.setWordWrap(True)
@@ -107,15 +162,20 @@ class MarkdownEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.toolbar)
+        layout.addWidget(self.table_bar)
         layout.addWidget(self.hint)
         layout.addWidget(self.stack, 1)
 
         self.text_edit.installEventFilter(self)
+        self.text_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.text_edit.customContextMenuRequested.connect(self._show_editor_menu)
         self.text_edit.textChanged.connect(self._on_changed)
         self.source_edit.textChanged.connect(self._on_changed)
         self.text_edit.document().modificationChanged.connect(self._emit_modified)
         self.source_edit.document().modificationChanged.connect(self._emit_modified)
         self.text_edit.cursorPositionChanged.connect(self._emit_cursor)
+        self.text_edit.cursorPositionChanged.connect(self._maybe_finish_hr_edit)
+        self.text_edit.cursorPositionChanged.connect(self._update_table_bar)
         self.source_edit.cursorPositionChanged.connect(self._emit_cursor)
         self._install_shortcuts()
 
@@ -180,6 +240,43 @@ class MarkdownEditor(QWidget):
         outer.addLayout(second)
         return bar
 
+    def _build_table_bar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("tableToolbar")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 3, 8, 3)
+        row.setSpacing(4)
+        for label, tooltip, slot in (
+            ("上方行", "在上方插入行", lambda: self._table_insert_row(0)),
+            ("下方行", "在下方插入行", lambda: self._table_insert_row(1)),
+            ("删行", "删除当前行", self._table_delete_row),
+            ("左列", "在左侧插入列", lambda: self._table_insert_column(0)),
+            ("右列", "在右侧插入列", lambda: self._table_insert_column(1)),
+            ("删列", "删除当前列", self._table_delete_column),
+            ("左对齐", "当前列左对齐", lambda: self._table_set_alignment("left")),
+            ("居中", "当前列居中对齐", lambda: self._table_set_alignment("center")),
+            ("右对齐", "当前列右对齐", lambda: self._table_set_alignment("right")),
+            ("删表", "删除表格", self._table_delete),
+        ):
+            button = QToolButton()
+            button.setText(label)
+            button.setToolTip(tooltip)
+            button.setAutoRaise(True)
+            button.clicked.connect(slot)
+            row.addWidget(button)
+        row.addStretch(1)
+        bar.hide()
+        return bar
+
+    def _update_table_bar(self) -> None:
+        if not hasattr(self, "table_bar"):
+            return
+        visible = (
+            not self._source_mode
+            and self.text_edit.textCursor().currentTable() is not None
+        )
+        self.table_bar.setVisible(visible)
+
     def _install_shortcuts(self) -> None:
         for sequence, slot in (
             ("Ctrl+B", self._toggle_weight),
@@ -197,12 +294,16 @@ class MarkdownEditor(QWidget):
     def load_document(self, path: Path, text: str) -> None:
         self._loading = True
         self._path = path
+        self._document_dir = path.parent
         self._pending_overrides = {}
+        self._editing_hr_pos = None
         self._front_matter = frontmatter.split(text)
+        self._parsed_table_alignments = self._parse_table_alignments(self._front_matter.body)
         body = self._prepare_body(self._front_matter)
         self._protected = mdx_guard.protect(body)
         self.text_edit.document().setMarkdown(self._protected.text, _feature_markdown())
         self._apply_typography()
+        self._apply_table_alignments()
         self.source_edit.setPlainText(text if text.endswith("\n") else text + "\n")
         self.text_edit.document().setModified(False)
         self.source_edit.document().setModified(False)
@@ -219,6 +320,10 @@ class MarkdownEditor(QWidget):
         self._protected = mdx_guard.Protected("")
         self._injected_title = False
         self._injected_title_text = ""
+        self._editing_hr_pos: int | None = None
+        self._suppress_hr_finish = False
+        self._parsed_table_alignments: list[list[str]] = []
+        self._document_dir: Path | None = None
         self.text_edit.clear()
         self.source_edit.clear()
         self.text_edit.document().setModified(False)
@@ -247,9 +352,54 @@ class MarkdownEditor(QWidget):
     def source_mode(self) -> bool:
         return self._source_mode
 
+    def set_project_context(self, docs_dir: Path | None) -> None:
+        self._docs_dir = Path(docs_dir) if docs_dir is not None else None
+
+    def _unique_asset_path(self, suffix: str) -> Path:
+        assert self._docs_dir is not None
+        assets = self._docs_dir / "assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        candidate = assets / f"image-{stamp}{suffix}"
+        counter = 2
+        while candidate.exists():
+            candidate = assets / f"image-{stamp}-{counter}{suffix}"
+            counter += 1
+        return candidate
+
+    def _handle_image_mime(self, source: QMimeData) -> str | None:
+        if self._docs_dir is None:
+            return None
+        target: Path | None = None
+        if source.hasImage():
+            image = QImage(source.imageData())
+            if image.isNull():
+                return None
+            target = self._unique_asset_path(".png")
+            if not image.save(str(target), "PNG"):
+                return None
+        else:
+            urls = MarkdownTextEdit._image_urls(source)
+            if not urls:
+                return None
+            source_path = Path(urls[0].toLocalFile())
+            suffix = source_path.suffix.lower() or ".png"
+            target = self._unique_asset_path(suffix)
+            try:
+                shutil.copy2(source_path, target)
+            except OSError:
+                return None
+        base = self._document_dir or self._docs_dir
+        try:
+            relative = os.path.relpath(target, base).replace(os.sep, "/")
+        except ValueError:
+            relative = target.as_posix()
+        return relative
+
     def current_text(self) -> str:
         if self._source_mode:
             return self.source_edit.toPlainText()
+        self._finish_hr_edit()
         markdown = self.text_edit.document().toMarkdown(_feature_markdown())
         restored = mdx_guard.restore(markdown, self._protected)
         restored = self._replace_tables(restored)
@@ -311,9 +461,20 @@ class MarkdownEditor(QWidget):
             [self._cell_text(table, row, column) for column in range(columns)]
             for row in range(rows)
         ]
+        alignments = self._table_alignments(table)
+        separator = {
+            "left": "---",
+            "center": ":---:",
+            "right": "---:",
+        }
         lines = [
             "| " + " | ".join(data[0]) + " |",
-            "| " + " | ".join("---" for _ in range(columns)) + " |",
+            "| "
+            + " | ".join(
+                separator.get(alignments[column], "---")
+                for column in range(columns)
+            )
+            + " |",
         ]
         for row in data[1:]:
             lines.append("| " + " | ".join(row) + " |")
@@ -370,7 +531,13 @@ class MarkdownEditor(QWidget):
                 elif stripped.startswith(fence):
                     in_fence = False
                 continue
-            if not in_fence and hr_re.match(stripped):
+            if in_fence:
+                continue
+            if hr_re.match(stripped) or stripped.replace("\\", "") in {
+                "---",
+                "***",
+                "___",
+            }:
                 lines[index] = "---\n" if line.endswith("\n") else "---"
         return "".join(lines)
 
@@ -406,6 +573,8 @@ class MarkdownEditor(QWidget):
         if enabled == self._source_mode:
             self.mode_button.setChecked(enabled)
             return
+        if enabled and hasattr(self, "table_bar"):
+            self.table_bar.hide()
         self._pending_overrides.clear()
         if enabled:
             text = self.current_text()
@@ -418,10 +587,14 @@ class MarkdownEditor(QWidget):
             text = self.source_edit.toPlainText()
             self._loading = True
             self._front_matter = frontmatter.split(text)
+            self._parsed_table_alignments = self._parse_table_alignments(
+                self._front_matter.body
+            )
             body = self._prepare_body(self._front_matter)
             self._protected = mdx_guard.protect(body)
             self.text_edit.document().setMarkdown(self._protected.text, _feature_markdown())
             self._apply_typography()
+            self._apply_table_alignments()
             self.text_edit.document().setModified(False)
             self._loading = False
             self._update_hint()
@@ -432,6 +605,7 @@ class MarkdownEditor(QWidget):
         self.mode_button.setText("富文本模式" if enabled else "源码模式")
         self.mode_button.blockSignals(False)
         self.hint.setVisible(not enabled and bool(self._protected.tokens))
+        self._update_table_bar()
         self._emit_word_count()
 
     def set_modified(self, value: bool) -> None:
@@ -635,6 +809,19 @@ class MarkdownEditor(QWidget):
             color = QColor("#57606a")
             weight = QFont.Weight.Normal
             families = ["Noto Sans CJK SC"]
+        elif fmt.hasProperty(
+            QTextFormat.Property.BlockTrailingHorizontalRulerWidth
+        ) and fmt.property(QTextFormat.Property.BlockTrailingHorizontalRulerWidth):
+            fmt.setLeftMargin(0)
+            fmt.setRightMargin(0)
+            fmt.setTopMargin(16)
+            fmt.setBottomMargin(16)
+            fmt.setLineHeight(100, 1)
+            fmt.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            size = 8.0
+            color = QColor("#d0d7de")
+            weight = QFont.Weight.Normal
+            families = ["Noto Sans CJK SC"]
         else:
             fmt.clearBackground()
             fmt.setLeftMargin(0)
@@ -642,8 +829,12 @@ class MarkdownEditor(QWidget):
             fmt.setTopMargin(0)
             fmt.setBottomMargin(6)
             fmt.setLineHeight(170, 1)
+            is_rule = block.text().strip() in {"---", "***", "___"}
+            fmt.setAlignment(
+                Qt.AlignmentFlag.AlignHCenter if is_rule else Qt.AlignmentFlag.AlignLeft
+            )
             size = 11.5
-            color = QColor("#24292f")
+            color = QColor("#9aa2ab") if is_rule else QColor("#24292f")
             weight = QFont.Weight.Normal
             families = ["Noto Sans CJK SC"]
         has_image = False
@@ -698,6 +889,23 @@ class MarkdownEditor(QWidget):
             fmt.setCellSpacing(0)
             fmt.setWidth(QTextLength(QTextLength.Type.PercentageLength, 100))
             table.setFormat(fmt)
+            alignments = self._table_alignments(table)
+            mapping = {
+                "left": Qt.AlignmentFlag.AlignLeft,
+                "center": Qt.AlignmentFlag.AlignHCenter,
+                "right": Qt.AlignmentFlag.AlignRight,
+            }
+            for column, alignment in enumerate(alignments):
+                flag = mapping.get(alignment, Qt.AlignmentFlag.AlignLeft)
+                for row in range(table.rows()):
+                    cell = table.cellAt(row, column)
+                    block = cell.firstCursorPosition().block()
+                    last_position = cell.lastCursorPosition().position()
+                    while block.isValid() and block.position() <= last_position:
+                        block_format = block.blockFormat()
+                        block_format.setAlignment(flag)
+                        QTextCursor(block).setBlockFormat(block_format)
+                        block = block.next()
             for column in range(table.columns()):
                 cell = table.cellAt(0, column)
                 cell_format = cell.format()
@@ -707,6 +915,9 @@ class MarkdownEditor(QWidget):
 
     # --------------------------------------------------------- autoformat
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self.text_edit and event.type() == QEvent.Type.MouseButtonDblClick:
+            if self._begin_hr_edit(event.position().toPoint()):
+                return True
         if obj is self.text_edit and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -717,6 +928,71 @@ class MarkdownEditor(QWidget):
                     return True
         return super().eventFilter(obj, event)
 
+    def _begin_hr_edit(self, point) -> bool:
+        cursor = self.text_edit.cursorForPosition(point)
+        block = cursor.block()
+        fmt = block.blockFormat()
+        if not (
+            fmt.hasProperty(QTextFormat.Property.BlockTrailingHorizontalRulerWidth)
+            and fmt.property(QTextFormat.Property.BlockTrailingHorizontalRulerWidth)
+        ):
+            return False
+        self._finish_hr_edit()
+        self._suppress_hr_finish = True
+        cursor = QTextCursor(block)
+        cursor.beginEditBlock()
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
+        )
+        cursor.insertText("---")
+        new_format = cursor.blockFormat()
+        new_format.clearProperty(
+            QTextFormat.Property.BlockTrailingHorizontalRulerWidth
+        )
+        new_format.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        cursor.setBlockFormat(new_format)
+        current_block = cursor.block()
+        self._editing_hr_pos = current_block.position()
+        start = current_block.position()
+        cursor.setPosition(start)
+        cursor.setPosition(
+            start + len(current_block.text()), QTextCursor.MoveMode.KeepAnchor
+        )
+        cursor.endEditBlock()
+        self.text_edit.setTextCursor(cursor)
+        self._suppress_hr_finish = False
+        return True
+
+    def _finish_hr_edit(self) -> None:
+        if self._editing_hr_pos is None:
+            return
+        self._suppress_hr_finish = True
+        block = self.text_edit.document().findBlock(self._editing_hr_pos)
+        self._editing_hr_pos = None
+        if not block.isValid():
+            return
+        if block.text().strip() not in {"---", "***", "___"}:
+            return
+        cursor = QTextCursor(block)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
+        )
+        cursor.removeSelectedText()
+        fmt = cursor.blockFormat()
+        fmt.setProperty(QTextFormat.Property.BlockTrailingHorizontalRulerWidth, 1)
+        fmt.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        cursor.setBlockFormat(fmt)
+        self._style_block(block)
+        self._suppress_hr_finish = False
+
+    def _maybe_finish_hr_edit(self) -> None:
+        if self._suppress_hr_finish or self._editing_hr_pos is None:
+            return
+        if self.text_edit.textCursor().block().position() != self._editing_hr_pos:
+            self._finish_hr_edit()
+
     def _autoformat_hr(self) -> bool:
         if self._source_mode:
             return False
@@ -726,17 +1002,22 @@ class MarkdownEditor(QWidget):
         if cursor.block().text().strip() not in {"---", "***", "___"}:
             return False
         cursor.beginEditBlock()
-        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
+        )
         cursor.removeSelectedText()
         block_format = cursor.blockFormat()
         block_format.setProperty(
             QTextFormat.Property.BlockTrailingHorizontalRulerWidth, 1
         )
+        block_format.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         cursor.setBlockFormat(block_format)
         cursor.insertBlock()
         cursor.setBlockFormat(QTextBlockFormat())
         cursor.endEditBlock()
         self._style_block(cursor.block())
+        self._editing_hr_pos = None
         self.text_edit.setTextCursor(cursor)
         return True
 
@@ -907,10 +1188,255 @@ class MarkdownEditor(QWidget):
             QTextLength(QTextLength.Type.PercentageLength, 100)
         )
         table = self._cursor().insertTable(rows, columns, table_format)
+        self._set_table_alignments(
+            table, ["left" for _ in range(columns)], restyle=False
+        )
         end_cursor = table.lastCursorPosition()
         end_cursor.insertBlock()
         self.text_edit.setTextCursor(end_cursor)
         self.text_edit.setFocus()
+
+    def _current_table(self):
+        cursor = self.text_edit.textCursor()
+        table = cursor.currentTable()
+        if table is None:
+            return None, None
+        cell = table.cellAt(cursor)
+        return table, cell
+
+    def _table_edit(self, operation) -> bool:
+        table, cell = self._current_table()
+        if table is None or cell is None:
+            return False
+        cursor = self.text_edit.textCursor()
+        cursor.beginEditBlock()
+        try:
+            operation(table, cell)
+        finally:
+            cursor.endEditBlock()
+        self._style_tables()
+        self.text_edit.setFocus()
+        return True
+
+    def _table_insert_row(self, offset: int) -> None:
+        self._table_edit(
+            lambda table, cell: table.insertRows(cell.row() + offset, 1)
+        )
+
+    def _table_delete_row(self) -> None:
+        def operation(table, cell):
+            if table.rows() > 1:
+                table.removeRows(cell.row(), 1)
+
+        self._table_edit(operation)
+
+    def _table_insert_column(self, offset: int) -> None:
+        self._table_edit(
+            lambda table, cell: table.insertColumns(cell.column() + offset, 1)
+        )
+
+    def _table_delete_column(self) -> None:
+        def operation(table, cell):
+            if table.columns() > 1:
+                table.removeColumns(cell.column(), 1)
+
+        self._table_edit(operation)
+
+    @staticmethod
+    def _parse_table_alignments(text: str) -> list[list[str]]:
+        lines = text.splitlines()
+        results: list[list[str]] = []
+        in_fence = False
+        fence = ""
+        separator = re.compile(
+            r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$"
+        )
+        index = 0
+        while index < len(lines) - 1:
+            stripped = lines[index].strip()
+            if stripped.startswith(("```", "~~~")):
+                marker = stripped[:3]
+                if not in_fence:
+                    in_fence = True
+                    fence = marker
+                elif stripped.startswith(fence):
+                    in_fence = False
+                index += 1
+                continue
+            if (
+                not in_fence
+                and stripped.startswith("|")
+                and separator.match(lines[index + 1].strip())
+            ):
+                cells = [
+                    cell.strip()
+                    for cell in lines[index + 1].strip().strip("|").split("|")
+                ]
+                alignments = []
+                for cell in cells:
+                    left = cell.startswith(":")
+                    right = cell.endswith(":")
+                    if left and right:
+                        alignments.append("center")
+                    elif right:
+                        alignments.append("right")
+                    else:
+                        alignments.append("left")
+                results.append(alignments)
+                index += 2
+                continue
+            index += 1
+        return results
+
+    def _table_alignments(self, table: QTextTable) -> list[str]:
+        raw = table.format().property(TABLE_ALIGN_PROPERTY)
+        if isinstance(raw, str):
+            values = raw.split(",")
+            if len(values) == table.columns():
+                return values
+        return ["left" for _ in range(table.columns())]
+
+    def _apply_table_alignments(self) -> None:
+        for index, table in enumerate(self._collect_tables()):
+            if index < len(self._parsed_table_alignments):
+                alignments = self._parsed_table_alignments[index]
+                if len(alignments) != table.columns():
+                    alignments = ["left" for _ in range(table.columns())]
+            else:
+                alignments = ["left" for _ in range(table.columns())]
+            self._set_table_alignments(table, alignments, restyle=False)
+
+    def _set_table_alignments(
+        self, table: QTextTable, alignments: list[str], restyle: bool = True
+    ) -> None:
+        fmt = table.format()
+        fmt.setProperty(TABLE_ALIGN_PROPERTY, ",".join(alignments))
+        table.setFormat(fmt)
+        mapping = {
+            "left": Qt.AlignmentFlag.AlignLeft,
+            "center": Qt.AlignmentFlag.AlignHCenter,
+            "right": Qt.AlignmentFlag.AlignRight,
+        }
+        for column, alignment in enumerate(alignments):
+            flag = mapping.get(alignment, Qt.AlignmentFlag.AlignLeft)
+            for row in range(table.rows()):
+                cell = table.cellAt(row, column)
+                cursor = QTextCursor(cell.firstCursorPosition())
+                block = cursor.block()
+                while block.isValid() and block.position() <= cell.lastCursorPosition().position():
+                    block_format = block.blockFormat()
+                    block_format.setAlignment(flag)
+                    QTextCursor(block).setBlockFormat(block_format)
+                    block = block.next()
+        if restyle:
+            self._style_tables()
+
+    def _table_set_alignment(self, alignment: str) -> None:
+        table, cell = self._current_table()
+        if table is None or cell is None:
+            return
+        alignments = self._table_alignments(table)
+        alignments[cell.column()] = alignment
+        self._set_table_alignments(table, alignments)
+
+    def _apply_column_widths(self, table, widths: list[float]) -> None:
+        fmt = table.format()
+        fmt.setColumnWidthConstraints(
+            [
+                QTextLength(QTextLength.Type.FixedLength, float(width))
+                for width in widths
+            ]
+        )
+        table.setFormat(fmt)
+
+    def _column_widths(self, table) -> list[float]:
+        fmt = table.format()
+        constraints = fmt.columnWidthConstraints()
+        if len(constraints) == table.columns():
+            return [max(40.0, length.rawValue()) for length in constraints]
+        width = max(
+            60.0,
+            (self.text_edit.viewport().width() - 80) / max(1, table.columns()),
+        )
+        return [width for _ in range(table.columns())]
+
+    def _table_equal_width(self) -> None:
+        def operation(table, _cell):
+            width = max(
+                60.0,
+                (self.text_edit.viewport().width() - 80) / max(1, table.columns()),
+            )
+            self._apply_column_widths(table, [width for _ in range(table.columns())])
+
+        self._table_edit(operation)
+
+    def _table_resize_column(self, delta: int) -> None:
+        def operation(table, cell):
+            widths = self._column_widths(table)
+            column = cell.column()
+            widths[column] = max(40.0, widths[column] + delta)
+            self._apply_column_widths(table, widths)
+
+        self._table_edit(operation)
+
+    def _table_delete(self) -> None:
+        table, _cell = self._current_table()
+        if table is None:
+            return
+        cursor = QTextCursor(table.firstCursorPosition())
+        cursor.setPosition(
+            table.lastCursorPosition().position(), QTextCursor.MoveMode.KeepAnchor
+        )
+        cursor.removeSelectedText()
+        self.text_edit.setFocus()
+
+    def _show_editor_menu(self, point) -> None:
+        menu = QMenu(self.text_edit)
+        for label, slot in (
+            ("撤销", self.text_edit.undo),
+            ("重做", self.text_edit.redo),
+        ):
+            action = QAction(label, menu)
+            action.triggered.connect(slot)
+            menu.addAction(action)
+        menu.addSeparator()
+        for label, slot in (
+            ("剪切", self.text_edit.cut),
+            ("复制", self.text_edit.copy),
+            ("粘贴", self.text_edit.paste),
+            ("全选", self.text_edit.selectAll),
+        ):
+            action = QAction(label, menu)
+            action.triggered.connect(slot)
+            menu.addAction(action)
+        table, _cell = self._current_table()
+        if table is not None:
+            menu.addSeparator()
+            for label, slot in (
+                ("在上方插入行", lambda: self._table_insert_row(0)),
+                ("在下方插入行", lambda: self._table_insert_row(1)),
+                ("删除当前行", self._table_delete_row),
+                ("在左侧插入列", lambda: self._table_insert_column(0)),
+                ("在右侧插入列", lambda: self._table_insert_column(1)),
+                ("删除当前列", self._table_delete_column),
+            ):
+                action = QAction(label, menu)
+                action.triggered.connect(slot)
+                menu.addAction(action)
+            menu.addSeparator()
+            for label, slot in (
+                ("左对齐", lambda: self._table_set_alignment("left")),
+                ("居中对齐", lambda: self._table_set_alignment("center")),
+                ("右对齐", lambda: self._table_set_alignment("right")),
+                ("平均列宽", self._table_equal_width),
+                ("加宽当前列", lambda: self._table_resize_column(24)),
+                ("缩窄当前列", lambda: self._table_resize_column(-24)),
+                ("删除表格", self._table_delete),
+            ):
+                action = QAction(label, menu)
+                action.triggered.connect(slot)
+                menu.addAction(action)
+        menu.exec(self.text_edit.mapToGlobal(point))
 
     def _insert_image(self) -> None:
         url, ok = QInputDialog.getText(self, "插入图片", "图片路径或 URL：")
@@ -940,9 +1466,11 @@ class MarkdownEditor(QWidget):
         block_format.setProperty(
             QTextFormat.Property.BlockTrailingHorizontalRulerWidth, 1
         )
+        block_format.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         cursor.setBlockFormat(block_format)
         cursor.insertBlock()
         cursor.setBlockFormat(QTextBlockFormat())
+        self._style_block(cursor.block())
         self.text_edit.setTextCursor(cursor)
         self.text_edit.setFocus()
 

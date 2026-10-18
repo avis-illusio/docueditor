@@ -221,6 +221,16 @@ QPlainTextEdit#sourceView {
     border-bottom: 1px solid #e5e7eb;
 }
 
+#tableToolbar {
+    background: #f6f8fa;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+#tableToolbar QToolButton {
+    padding: 2px 7px;
+    font-size: 12px;
+}
+
 #editorHint {
     background: #fff8e6;
     color: #7a5a1e;

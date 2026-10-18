@@ -397,6 +397,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "打开失败", f"找不到文档：{rel}")
             return
         self.current_entry = entry
+        self.editor.set_project_context(project.docs_dir)
         self.editor.load_document(entry.path, read_text(entry.path))
         self.center_stack.setCurrentWidget(self.editor)
         self.front_matter_panel.set_document(entry)
