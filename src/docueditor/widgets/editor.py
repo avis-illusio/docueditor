@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -895,7 +896,8 @@ class MarkdownEditor(QWidget):
                 cell_format.setBackground(QColor("#f6f8fa"))
                 cell_format.setFontWeight(QFont.Weight.Bold)
                 cell.setFormat(cell_format)
-            self._apply_cell_alignment(table, self._table_alignments(table))
+            if sys.version_info >= (3, 11):
+                self._apply_cell_alignment(table, self._table_alignments(table))
 
     # --------------------------------------------------------- autoformat
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
@@ -1317,7 +1319,8 @@ class MarkdownEditor(QWidget):
         fmt = table.format()
         fmt.setProperty(TABLE_ALIGN_PROPERTY, encoded)
         table.setFormat(fmt)
-        self._apply_cell_alignment(table, alignments)
+        if sys.version_info >= (3, 11):
+            self._apply_cell_alignment(table, alignments)
         if restyle:
             self._style_tables()
 
