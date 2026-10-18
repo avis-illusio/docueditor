@@ -1,3 +1,4 @@
+import gc
 import os
 
 import pytest
@@ -21,6 +22,8 @@ def qapp(tmp_path_factory):
     for widget in app.topLevelWidgets():
         widget.close()
         widget.deleteLater()
+    app.processEvents()
+    gc.collect()
     app.processEvents()
     app.quit()
 
