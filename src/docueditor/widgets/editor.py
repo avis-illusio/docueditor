@@ -895,6 +895,7 @@ class MarkdownEditor(QWidget):
                 cell_format.setBackground(QColor("#f6f8fa"))
                 cell_format.setFontWeight(QFont.Weight.Bold)
                 cell.setFormat(cell_format)
+            self._apply_cell_alignment(table, self._table_alignments(table))
 
     # --------------------------------------------------------- autoformat
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
@@ -1281,6 +1282,21 @@ class MarkdownEditor(QWidget):
             return values
         return ["left" for _ in range(table.columns())]
 
+    @staticmethod
+    def _apply_cell_alignment(table: QTextTable, alignments: list[str]) -> None:
+        mapping = {
+            "left": Qt.AlignmentFlag.AlignLeft,
+            "center": Qt.AlignmentFlag.AlignHCenter,
+            "right": Qt.AlignmentFlag.AlignRight,
+        }
+        for column, alignment in enumerate(alignments):
+            flag = mapping.get(alignment, Qt.AlignmentFlag.AlignLeft)
+            for row in range(table.rows()):
+                cursor = table.cellAt(row, column).firstCursorPosition()
+                block_format = cursor.blockFormat()
+                block_format.setAlignment(flag)
+                cursor.setBlockFormat(block_format)
+
     def _apply_table_alignments(self) -> None:
         for index, table in enumerate(self._collect_tables()):
             if index < len(self._parsed_table_alignments):
@@ -1301,6 +1317,7 @@ class MarkdownEditor(QWidget):
         fmt = table.format()
         fmt.setProperty(TABLE_ALIGN_PROPERTY, encoded)
         table.setFormat(fmt)
+        self._apply_cell_alignment(table, alignments)
         if restyle:
             self._style_tables()
 
