@@ -889,23 +889,6 @@ class MarkdownEditor(QWidget):
             fmt.setCellSpacing(0)
             fmt.setWidth(QTextLength(QTextLength.Type.PercentageLength, 100))
             table.setFormat(fmt)
-            alignments = self._table_alignments(table)
-            mapping = {
-                "left": Qt.AlignmentFlag.AlignLeft,
-                "center": Qt.AlignmentFlag.AlignHCenter,
-                "right": Qt.AlignmentFlag.AlignRight,
-            }
-            for column, alignment in enumerate(alignments):
-                flag = mapping.get(alignment, Qt.AlignmentFlag.AlignLeft)
-                for row in range(table.rows()):
-                    cell = table.cellAt(row, column)
-                    block = cell.firstCursorPosition().block()
-                    last_position = cell.lastCursorPosition().position()
-                    while block.isValid() and block.position() <= last_position:
-                        block_format = block.blockFormat()
-                        block_format.setAlignment(flag)
-                        QTextCursor(block).setBlockFormat(block_format)
-                        block = block.next()
             for column in range(table.columns()):
                 cell = table.cellAt(0, column)
                 cell_format = cell.format()
@@ -1318,22 +1301,6 @@ class MarkdownEditor(QWidget):
         fmt = table.format()
         fmt.setProperty(TABLE_ALIGN_PROPERTY, encoded)
         table.setFormat(fmt)
-        mapping = {
-            "left": Qt.AlignmentFlag.AlignLeft,
-            "center": Qt.AlignmentFlag.AlignHCenter,
-            "right": Qt.AlignmentFlag.AlignRight,
-        }
-        for column, alignment in enumerate(alignments):
-            flag = mapping.get(alignment, Qt.AlignmentFlag.AlignLeft)
-            for row in range(table.rows()):
-                cell = table.cellAt(row, column)
-                cursor = QTextCursor(cell.firstCursorPosition())
-                block = cursor.block()
-                while block.isValid() and block.position() <= cell.lastCursorPosition().position():
-                    block_format = block.blockFormat()
-                    block_format.setAlignment(flag)
-                    QTextCursor(block).setBlockFormat(block_format)
-                    block = block.next()
         if restyle:
             self._style_tables()
 
