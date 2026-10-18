@@ -1339,46 +1339,6 @@ class MarkdownEditor(QWidget):
         alignments[cell.column()] = alignment
         self._set_table_alignments(table, alignments)
 
-    def _apply_column_widths(self, table, widths: list[float]) -> None:
-        fmt = table.format()
-        fmt.setColumnWidthConstraints(
-            [
-                QTextLength(QTextLength.Type.FixedLength, float(width))
-                for width in widths
-            ]
-        )
-        table.setFormat(fmt)
-
-    def _column_widths(self, table) -> list[float]:
-        fmt = table.format()
-        constraints = fmt.columnWidthConstraints()
-        if len(constraints) == table.columns():
-            return [max(40.0, length.rawValue()) for length in constraints]
-        width = max(
-            60.0,
-            (self.text_edit.viewport().width() - 80) / max(1, table.columns()),
-        )
-        return [width for _ in range(table.columns())]
-
-    def _table_equal_width(self) -> None:
-        def operation(table, _cell):
-            width = max(
-                60.0,
-                (self.text_edit.viewport().width() - 80) / max(1, table.columns()),
-            )
-            self._apply_column_widths(table, [width for _ in range(table.columns())])
-
-        self._table_edit(operation)
-
-    def _table_resize_column(self, delta: int) -> None:
-        def operation(table, cell):
-            widths = self._column_widths(table)
-            column = cell.column()
-            widths[column] = max(40.0, widths[column] + delta)
-            self._apply_column_widths(table, widths)
-
-        self._table_edit(operation)
-
     def _table_delete(self) -> None:
         table, _cell = self._current_table()
         if table is None:
@@ -1428,9 +1388,6 @@ class MarkdownEditor(QWidget):
                 ("左对齐", lambda: self._table_set_alignment("left")),
                 ("居中对齐", lambda: self._table_set_alignment("center")),
                 ("右对齐", lambda: self._table_set_alignment("right")),
-                ("平均列宽", self._table_equal_width),
-                ("加宽当前列", lambda: self._table_resize_column(24)),
-                ("缩窄当前列", lambda: self._table_resize_column(-24)),
                 ("删除表格", self._table_delete),
             ):
                 action = QAction(label, menu)

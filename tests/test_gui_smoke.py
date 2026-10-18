@@ -412,8 +412,6 @@ def test_table_editing_actions(qapp, tmp_path):
     assert table.rows() == 3
     editor._table_insert_column(1)
     assert table.columns() == 3
-    # editor._table_equal_width()
-    # assert len(table.format().columnWidthConstraints()) == 3
     editor._table_delete_row()
     assert table.rows() == 2
     # Table operations may move the cursor out; re-enter before deleting a column.
@@ -423,9 +421,6 @@ def test_table_editing_actions(qapp, tmp_path):
     editor.deleteLater()
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11), reason="PySide6 6.12/QImage teardown on 3.10"
-)
 def test_paste_image_copies_to_assets(qapp, tmp_path):
     from PySide6.QtCore import QMimeData
     from PySide6.QtGui import QImage
@@ -448,9 +443,6 @@ def test_paste_image_copies_to_assets(qapp, tmp_path):
     editor.deleteLater()
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11), reason="PySide6 6.12/QTextTable teardown on 3.10"
-)
 def test_table_alignment_roundtrip(qapp, tmp_path):
     editor = MarkdownEditor()
     editor.resize(700, 500)
