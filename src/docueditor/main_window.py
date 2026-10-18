@@ -31,6 +31,7 @@ from .widgets.editor import MarkdownEditor
 from .widgets.file_tree import FileTree
 from .widgets.frontmatter_panel import FrontMatterPanel
 from .widgets.import_dialog import ImportDialog
+from .widgets.new_document_dialog import NewDocumentDialog
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -293,6 +294,7 @@ class MainWindow(QMainWindow):
         self.file_tree.moveRequested.connect(self.move_document)
         self.file_tree.dropRequested.connect(self.handle_drop_move)
         self.file_tree.newChildDocumentRequested.connect(self.new_child_document)
+        self.file_tree.newFolderRequested.connect(self.new_folder)
         self.file_tree.revealRequested.connect(self.reveal_document)
         self.file_tree.refreshRequested.connect(self.refresh_tree)
         self.front_matter_panel.applyRequested.connect(self.apply_front_matter)
@@ -411,19 +413,77 @@ class MainWindow(QMainWindow):
             return
         if not rel_dir:
             rel_dir = self.file_tree.selected_dir()
-        title, ok = QInputDialog.getText(self, "新建文档", "文档标题：")
-        if not ok or not title.strip():
+        values = NewDocumentDialog.ask(self, rel_dir or "docs")
+        if values is None:
             return
+        filename, title = values
         if not self._maybe_save():
             return
         try:
-            entry = project.create_doc(title.strip(), title=title.strip(), rel_dir=rel_dir)
+            entry = project.create_doc(
+                filename, title=title, rel_dir=rel_dir
+            )
         except (ProjectError, OSError) as exc:
             QMessageBox.critical(self, "新建文档失败", str(exc))
             return
         self._refresh_after_change()
         self.open_document(entry.rel)
         self.statusBar().showMessage(f"已创建 {entry.rel}", 4000)
+
+    def new_folder(self, rel_dir: str) -> None:
+        project = self._require_project()
+        if project is None:
+            return
+        if not rel_dir:
+            rel_dir = self.file_tree.selected_dir()
+        name, ok = QInputDialog.getText(self, "新建文件夹", "文件夹名称：")
+        if not ok or not name.strip():
+            return
+        try:
+            directory = project.create_folder(name.strip(), rel_dir)
+        except (ProjectError, OSError) as exc:
+            QMessageBox.critical(self, "新建文件夹失败", str(exc))
+            return
+        self._refresh_after_change()
+        self.file_tree.select(directory.rel)
+        self.statusBar().showMessage(f"已创建文件夹 {directory.rel}", 4000)
+
+    def new_child_document(self, rel: str) -> None:
+        """Create a child document, turning the parent into a folder if needed."""
+        project = self._require_project()
+        if project is None:
+            return
+        entry = next((item for item in project.entries if item.rel == rel), None)
+        if entry is None:
+            return
+        location = Path(rel).with_suffix("").as_posix()
+        values = NewDocumentDialog.ask(self, location)
+        if values is None:
+            return
+        filename, title = values
+        if not self._maybe_save():
+            return
+        was_current = (
+            self.current_entry is not None and self.current_entry.path == entry.path
+        )
+        try:
+            container = project.ensure_container(entry)
+        except (ProjectError, OSError) as exc:
+            QMessageBox.critical(self, "创建子文档失败", str(exc))
+            return
+        self._refresh_after_change()
+        if was_current:
+            self.open_document(f"{container}/index.mdx")
+        try:
+            child = project.create_doc(
+                filename, title=title, rel_dir=container
+            )
+        except (ProjectError, OSError) as exc:
+            QMessageBox.critical(self, "创建子文档失败", str(exc))
+            return
+        self._refresh_after_change()
+        self.open_document(child.rel)
+        self.statusBar().showMessage(f"已创建 {child.rel}", 4000)
 
     def rename_document(self, rel: str) -> None:
         project = self._require_project()
@@ -552,41 +612,6 @@ class MainWindow(QMainWindow):
                 self.front_matter_panel.set_document(refreshed)
         self.statusBar().showMessage(f"已移动 {new_rel}", 4000)
 
-    def new_child_document(self, rel: str) -> None:
-        """Create a child document, turning the parent into a folder if needed."""
-        project = self._require_project()
-        if project is None:
-            return
-        entry = next((item for item in project.entries if item.rel == rel), None)
-        if entry is None:
-            return
-        if not self._maybe_save():
-            return
-        was_current = (
-            self.current_entry is not None and self.current_entry.path == entry.path
-        )
-        try:
-            container = project.ensure_container(entry)
-        except (ProjectError, OSError) as exc:
-            QMessageBox.critical(self, "创建子文档失败", str(exc))
-            return
-        self._refresh_after_change()
-        if was_current:
-            self.open_document(f"{container}/index.mdx")
-        title, ok = QInputDialog.getText(self, "新建子文档", "文档标题：")
-        if not ok or not title.strip():
-            return
-        try:
-            child = project.create_doc(
-                title.strip(), title=title.strip(), rel_dir=container
-            )
-        except (ProjectError, OSError) as exc:
-            QMessageBox.critical(self, "创建子文档失败", str(exc))
-            return
-        self._refresh_after_change()
-        self.open_document(child.rel)
-        self.statusBar().showMessage(f"已创建 {child.rel}", 4000)
-
     def reveal_document(self, rel: str) -> None:
         project = self._require_project()
         if project is None or project.docs_dir is None:
@@ -685,6 +710,9 @@ class MainWindow(QMainWindow):
     def apply_front_matter(self, overrides: dict) -> None:
         if self.current_entry is None:
             return
+        title = overrides.get("title")
+        if isinstance(title, str):
+            self.editor.set_title_heading(title)
         self.editor.set_front_matter_overrides(overrides)
         self.editor.text_edit.document().setModified(True)
         self.save_current()

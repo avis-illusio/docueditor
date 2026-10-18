@@ -63,7 +63,8 @@ def protect(text: str) -> Protected:
     while i < len(lines):
         line = lines[i]
 
-        # Fenced code blocks: keep language info intact by protecting them.
+        # Fenced code blocks are left to Qt, but their content must not be
+        # scanned for JSX/imports/admonitions.
         fence_match = _FENCE.match(line)
         if fence_match:
             fence = fence_match.group("fence")
@@ -77,21 +78,8 @@ def protect(text: str) -> Protected:
                     i += 1
                     break
                 i += 1
-            emit(block)
+            out.extend(block)
             continue
-
-        # Markdown tables: Qt can render them, but its Markdown exporter
-        # loses column alignment and the first header cell.  Protect them.
-        if _TABLE_ROW.match(line):
-            block = [line]
-            j = i + 1
-            while j < len(lines) and _TABLE_ROW.match(lines[j]):
-                block.append(lines[j])
-                j += 1
-            if any(_TABLE_SEPARATOR.match(entry) for entry in block[1:]):
-                i = j
-                emit(block)
-                continue
 
         # import / export statements (single line or a small continuation).
         if _IMPORT_EXPORT.match(line):
@@ -167,12 +155,7 @@ def describe_tokens(protected: Protected) -> list[str]:
     labels: list[str] = []
     for token, block in protected.tokens.items():
         first = block.splitlines()[0].strip() if block else ""
-        if first.startswith(("```", "~~~")):
-            info = first.lstrip("`~").strip()
-            labels.append(f"{token}: 代码块{' (' + info + ')' if info else ''}")
-        elif first.startswith("|"):
-            labels.append(f"{token}: Markdown 表格")
-        elif first.startswith(("import", "export")):
+        if first.startswith(("import", "export")):
             labels.append(f"{token}: ESM 语句")
         elif first.startswith(":::"):
             labels.append(f"{token}: 指令块")

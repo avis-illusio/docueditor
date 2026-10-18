@@ -9,6 +9,7 @@ editing.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -16,11 +17,17 @@ from PySide6.QtGui import (
     QFont,
     QKeySequence,
     QShortcut,
+    QTextBlock,
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
     QTextDocument,
+    QTextFormat,
+    QTextImageFormat,
+    QTextLength,
     QTextListFormat,
+    QTextTable,
+    QTextTableFormat,
 )
 from PySide6.QtWidgets import (
     QComboBox,
@@ -66,6 +73,8 @@ class MarkdownEditor(QWidget):
         self._front_matter = frontmatter.FrontMatter()
         self._protected = mdx_guard.Protected("")
         self._pending_overrides: dict[str, object] = {}
+        self._injected_title = False
+        self._injected_title_text = ""
 
         self.text_edit = QTextEdit()
         self.text_edit.setAcceptRichText(True)
@@ -110,49 +119,61 @@ class MarkdownEditor(QWidget):
     def _build_toolbar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("editorToolbar")
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(4)
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(8, 4, 8, 4)
+        outer.setSpacing(2)
 
+        first = QHBoxLayout()
+        first.setSpacing(4)
         self.heading_combo = QComboBox()
         self.heading_combo.addItems(["正文", "标题 1", "标题 2", "标题 3"])
         self.heading_combo.setFixedWidth(96)
         self.heading_combo.currentIndexChanged.connect(self._apply_heading)
-        layout.addWidget(self.heading_combo)
+        first.addWidget(self.heading_combo)
 
-        for label, tooltip, slot, shortcut in (
-            ("B", "粗体 (Ctrl+B)", lambda: self._toggle_weight(), "Ctrl+B"),
-            ("I", "斜体 (Ctrl+I)", lambda: self._toggle_italic(), "Ctrl+I"),
-            ("S", "删除线 (Ctrl+Shift+X)", lambda: self._toggle_strike(), "Ctrl+Shift+X"),
-            ("<>", "行内代码 (Ctrl+`)", lambda: self._toggle_code(), "Ctrl+`"),
-        ):
-            button = QToolButton()
-            button.setText(label)
-            button.setToolTip(tooltip)
-            button.setAutoRaise(True)
-            button.clicked.connect(slot)
-            layout.addWidget(button)
-
-        layout.addSpacing(6)
         for label, tooltip, slot in (
+            ("B", "粗体 (Ctrl+B)", self._toggle_weight),
+            ("I", "斜体 (Ctrl+I)", self._toggle_italic),
+            ("S", "删除线 (Ctrl+Shift+X)", self._toggle_strike),
+            ("<>", "行内代码 (Ctrl+`)", self._toggle_code),
             ("• 列表", "无序列表", lambda: self._make_list(QTextListFormat.Style.ListDisc)),
             ("1. 列表", "有序列表", lambda: self._make_list(QTextListFormat.Style.ListDecimal)),
+            ("任务", "任务列表", self._insert_task_list),
+            ("引用", "引用块 (Ctrl+Shift+Q)", self._toggle_quote),
             ("链接", "插入链接 (Ctrl+K)", self._insert_link),
-            ("清除格式", "清除字符格式", self._clear_format),
+            ("清除格式", "清除格式", self._clear_format),
         ):
             button = QToolButton()
             button.setText(label)
             button.setToolTip(tooltip)
             button.setAutoRaise(True)
             button.clicked.connect(slot)
-            layout.addWidget(button)
+            first.addWidget(button)
+        first.addStretch(1)
 
-        layout.addStretch(1)
+        second = QHBoxLayout()
+        second.setSpacing(4)
+        for label, tooltip, slot in (
+            ("代码块", "代码块（可编辑，语言可后续在源码模式调整）", self._toggle_block_code),
+            ("表格", "插入 Markdown 表格", self._insert_table),
+            ("图片", "插入图片", self._insert_image),
+            ("分隔线", "插入水平分隔线", self._insert_hr),
+        ):
+            button = QToolButton()
+            button.setText(label)
+            button.setToolTip(tooltip)
+            button.setAutoRaise(True)
+            button.clicked.connect(slot)
+            second.addWidget(button)
+        second.addStretch(1)
         self.mode_button = QPushButton("源码模式")
         self.mode_button.setCheckable(True)
         self.mode_button.setToolTip("在富文本与 Markdown 源码之间切换 (Ctrl+E)")
         self.mode_button.toggled.connect(self.set_source_mode)
-        layout.addWidget(self.mode_button)
+        second.addWidget(self.mode_button)
+
+        outer.addLayout(first)
+        outer.addLayout(second)
         return bar
 
     def _install_shortcuts(self) -> None:
@@ -162,6 +183,7 @@ class MarkdownEditor(QWidget):
             ("Ctrl+Shift+X", self._toggle_strike),
             ("Ctrl+`", self._toggle_code),
             ("Ctrl+K", self._insert_link),
+            ("Ctrl+Shift+Q", self._toggle_quote),
         ):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -173,7 +195,8 @@ class MarkdownEditor(QWidget):
         self._path = path
         self._pending_overrides = {}
         self._front_matter = frontmatter.split(text)
-        self._protected = mdx_guard.protect(self._front_matter.body)
+        body = self._prepare_body(self._front_matter)
+        self._protected = mdx_guard.protect(body)
         self.text_edit.document().setMarkdown(self._protected.text, _feature_markdown())
         self.source_edit.setPlainText(text if text.endswith("\n") else text + "\n")
         self.text_edit.document().setModified(False)
@@ -189,6 +212,8 @@ class MarkdownEditor(QWidget):
         self._path = None
         self._front_matter = frontmatter.FrontMatter()
         self._protected = mdx_guard.Protected("")
+        self._injected_title = False
+        self._injected_title_text = ""
         self.text_edit.clear()
         self.source_edit.clear()
         self.text_edit.document().setModified(False)
@@ -203,7 +228,7 @@ class MarkdownEditor(QWidget):
             self.hint.hide()
             return
         self.hint.setText(
-            "已保护 " + str(len(labels)) + " 个 MDX/代码块（保存时原样写回）：" + "；".join(labels[:4])
+            "已保护 " + str(len(labels)) + " 个 MDX 结构（保存时原样写回）：" + "；".join(labels[:4])
             + ("…" if len(labels) > 4 else "")
         )
         self.hint.show()
@@ -222,17 +247,122 @@ class MarkdownEditor(QWidget):
             return self.source_edit.toPlainText()
         markdown = self.text_edit.document().toMarkdown(_feature_markdown())
         restored = mdx_guard.restore(markdown, self._protected)
-        base = self._front_matter.with_overrides(self._pending_overrides)
-        header = frontmatter.split(base).lines if self._front_matter.has_header else []
+        restored = self._replace_tables(restored)
+        overrides = dict(self._pending_overrides)
+        if self._injected_title:
+            match = re.match(r"^#\s+(.+?)\s*\n+", restored)
+            if match:
+                heading = match.group(1).strip()
+                restored = "\n" + restored[match.end() :].lstrip("\n")
+                if "title" not in overrides and heading:
+                    overrides["title"] = heading
+        header = list(self._front_matter.lines)
         merged = frontmatter.FrontMatter(
             lines=header,
             body=restored,
-            has_header=bool(header) or self._front_matter.has_header,
+            has_header=self._front_matter.has_header or bool(header),
         )
-        text = frontmatter.join(merged)
-        if self._pending_overrides:
-            text = frontmatter.split(text).with_overrides(self._pending_overrides)
+        text = merged.with_overrides(overrides) if overrides else frontmatter.join(merged)
         return text if text.endswith("\n") else text + "\n"
+
+    # -------------------------------------------------------------- tables
+    def _collect_tables(self) -> list[QTextTable]:
+        tables: list[QTextTable] = []
+        root = self.text_edit.document().rootFrame()
+
+        def walk(frame) -> None:
+            iterator = frame.begin()
+            while not iterator.atEnd():
+                child = iterator.currentFrame()
+                if isinstance(child, QTextTable):
+                    tables.append(child)
+                elif child is not None:
+                    walk(child)
+                iterator += 1
+
+        walk(root)
+        return tables
+
+    @staticmethod
+    def _cell_text(table: QTextTable, row: int, column: int) -> str:
+        cell = table.cellAt(row, column)
+        cursor = QTextCursor(cell.firstCursorPosition())
+        cursor.setPosition(
+            cell.lastCursorPosition().position(), QTextCursor.MoveMode.KeepAnchor
+        )
+        text = cursor.selectedText()
+        text = text.replace("\u2029", "<br>").replace("\n", "<br>")
+        text = re.sub(r"^(?:<br>)+|(?:<br>)+$", "", text).strip()
+        text = re.sub(r"(?:<br>){2,}", "<br>", text)
+        return text.replace("|", "\\|")
+
+    def _table_to_markdown(self, table: QTextTable) -> str:
+        rows = table.rows()
+        columns = table.columns()
+        if rows <= 0 or columns <= 0:
+            return ""
+        data = [
+            [self._cell_text(table, row, column) for column in range(columns)]
+            for row in range(rows)
+        ]
+        lines = [
+            "| " + " | ".join(data[0]) + " |",
+            "| " + " | ".join("---" for _ in range(columns)) + " |",
+        ]
+        for row in data[1:]:
+            lines.append("| " + " | ".join(row) + " |")
+        return "\n".join(lines)
+
+    def _replace_tables(self, markdown: str) -> str:
+        tables = self._collect_tables()
+        if not tables:
+            return markdown
+        lines = markdown.splitlines(keepends=True)
+        blocks: list[tuple[int, int]] = []
+        in_fence = False
+        fence = ""
+        index = 0
+        row_re = re.compile(r"^[ \t]*\|.*\|[ \t]*$")
+        while index < len(lines):
+            stripped = lines[index].strip()
+            if stripped.startswith(("```", "~~~")):
+                marker = stripped[:3]
+                if not in_fence:
+                    in_fence = True
+                    fence = marker
+                elif stripped.startswith(fence):
+                    in_fence = False
+                index += 1
+                continue
+            if not in_fence and row_re.match(lines[index].rstrip("\n")):
+                begin = index
+                while index < len(lines) and row_re.match(
+                    lines[index].rstrip("\n")
+                ):
+                    index += 1
+                blocks.append((begin, index))
+            else:
+                index += 1
+        for (begin, end), table in reversed(list(zip(blocks, tables))):
+            replacement = self._table_to_markdown(table) + "\n"
+            lines[begin:end] = [replacement]
+        return "".join(lines)
+
+    def _prepare_body(self, parsed: frontmatter.FrontMatter) -> str:
+        """Inject front matter ``title`` as a visible H1 in the WYSIWYG view."""
+        title = parsed.values.get("title")
+        body = parsed.body
+        self._injected_title = False
+        self._injected_title_text = ""
+        if isinstance(title, str) and title.strip():
+            first = next(
+                (line.strip() for line in body.splitlines() if line.strip()), ""
+            )
+            if not first.startswith("# "):
+                self._injected_title = True
+                self._injected_title_text = title.strip()
+                body = f"# {title.strip()}\n\n{body}"
+        return body
 
     def set_front_matter_overrides(self, overrides: dict[str, object]) -> None:
         self._pending_overrides.update(overrides)
@@ -262,7 +392,8 @@ class MarkdownEditor(QWidget):
             text = self.source_edit.toPlainText()
             self._loading = True
             self._front_matter = frontmatter.split(text)
-            self._protected = mdx_guard.protect(self._front_matter.body)
+            body = self._prepare_body(self._front_matter)
+            self._protected = mdx_guard.protect(body)
             self.text_edit.document().setMarkdown(self._protected.text, _feature_markdown())
             self.text_edit.document().setModified(False)
             self._loading = False
@@ -425,6 +556,168 @@ class MarkdownEditor(QWidget):
         cursor.insertText(selected, fmt)
         self.text_edit.setFocus()
 
+    def _selected_blocks(self) -> list[QTextBlock]:
+        cursor = self._cursor()
+        document = self.text_edit.document()
+        block = document.findBlock(cursor.selectionStart())
+        last = document.findBlock(cursor.selectionEnd())
+        blocks: list[QTextBlock] = []
+        while block.isValid():
+            blocks.append(block)
+            if block == last:
+                break
+            block = block.next()
+        return blocks
+
+    def _source_prefix(self, prefix: str, toggle: bool = True) -> None:
+        cursor = self.source_edit.textCursor()
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        block_cursor = QTextCursor(cursor)
+        block_cursor.setPosition(start)
+        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        block_cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        block_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        text = block_cursor.selectedText().replace("\u2029", "\n")
+        lines = text.split("\n")
+        if toggle and lines and all(line.startswith(prefix) for line in lines if line.strip()):
+            new_lines = [line[len(prefix) :] if line.startswith(prefix) else line for line in lines]
+        else:
+            new_lines = [prefix + line if line.strip() else line for line in lines]
+        block_cursor.insertText("\n".join(new_lines))
+
+    def _toggle_quote(self) -> None:
+        if self._source_mode:
+            self._source_prefix("> ")
+            return
+        blocks = self._selected_blocks()
+        if not blocks:
+            return
+        current = blocks[0].blockFormat().property(QTextFormat.Property.BlockQuoteLevel) or 0
+        level = 0 if current else 1
+        for block in blocks:
+            cursor = QTextCursor(block)
+            fmt = block.blockFormat()
+            fmt.setProperty(QTextFormat.Property.BlockQuoteLevel, level)
+            cursor.setBlockFormat(fmt)
+        self.text_edit.setFocus()
+
+    def _toggle_block_code(self) -> None:
+        if self._source_mode:
+            cursor = self.source_edit.textCursor()
+            selected = cursor.selectedText()
+            if selected:
+                cursor.insertText(f"```text\n{selected}\n```")
+            else:
+                cursor.insertText("```text\n\n```")
+                cursor.movePosition(QTextCursor.MoveOperation.Up)
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfLine)
+                self.source_edit.setTextCursor(cursor)
+            return
+        blocks = self._selected_blocks()
+        if not blocks:
+            return
+        is_code = any(
+            block.blockFormat().property(QTextFormat.Property.BlockCodeLanguage)
+            for block in blocks
+        )
+        for block in blocks:
+            cursor = QTextCursor(block)
+            fmt = block.blockFormat()
+            if is_code:
+                fmt.clearProperty(QTextFormat.Property.BlockCodeLanguage)
+                fmt.setNonBreakableLines(False)
+            else:
+                fmt.setProperty(QTextFormat.Property.BlockCodeLanguage, "text")
+                fmt.setNonBreakableLines(True)
+            cursor.setBlockFormat(fmt)
+        self.text_edit.setFocus()
+
+    def _insert_task_list(self) -> None:
+        if self._source_mode:
+            self._source_prefix("- [ ] ", toggle=False)
+            return
+        cursor = self._cursor()
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        if not cursor.block().text().startswith("[ ]"):
+            cursor.insertText("[ ] ")
+        list_format = QTextListFormat()
+        list_format.setStyle(QTextListFormat.Style.ListDisc)
+        list_format.setIndent(1)
+        cursor.createList(list_format)
+        self.text_edit.setFocus()
+
+    def _insert_table(self) -> None:
+        if self._source_mode:
+            template = "| 列 1 | 列 2 |\n| --- | --- |\n|  |  |\n"
+            self.source_edit.textCursor().insertText(template)
+            return
+        rows, ok = QInputDialog.getInt(self, "插入表格", "行数（含表头）：", 2, 1, 50)
+        if not ok:
+            return
+        columns, ok = QInputDialog.getInt(self, "插入表格", "列数：", 2, 1, 20)
+        if not ok:
+            return
+        table_format = QTextTableFormat()
+        table_format.setBorder(1)
+        table_format.setCellSpacing(0)
+        table_format.setCellPadding(4)
+        table_format.setWidth(
+            QTextLength(QTextLength.Type.PercentageLength, 100)
+        )
+        table = self._cursor().insertTable(rows, columns, table_format)
+        end_cursor = table.lastCursorPosition()
+        end_cursor.insertBlock()
+        self.text_edit.setTextCursor(end_cursor)
+        self.text_edit.setFocus()
+
+    def _insert_image(self) -> None:
+        url, ok = QInputDialog.getText(self, "插入图片", "图片路径或 URL：")
+        if not ok or not url.strip():
+            return
+        alt, ok = QInputDialog.getText(self, "插入图片", "替代文字（可留空）：")
+        if not ok:
+            return
+        if self._source_mode:
+            self.source_edit.textCursor().insertText(
+                f"![{alt.strip()}]({url.strip()})"
+            )
+            return
+        image_format = QTextImageFormat()
+        image_format.setName(url.strip())
+        image_format.setProperty(QTextFormat.Property.ImageAltText, alt.strip())
+        self._cursor().insertImage(image_format)
+        self.text_edit.setFocus()
+
+    def _insert_hr(self) -> None:
+        if self._source_mode:
+            self.source_edit.textCursor().insertText("\n---\n")
+            return
+        cursor = self._cursor()
+        cursor.insertBlock()
+        block_format = cursor.blockFormat()
+        block_format.setProperty(
+            QTextFormat.Property.BlockTrailingHorizontalRulerWidth, 1
+        )
+        cursor.setBlockFormat(block_format)
+        cursor.insertBlock()
+        cursor.setBlockFormat(QTextBlockFormat())
+        self.text_edit.setTextCursor(cursor)
+        self.text_edit.setFocus()
+
+    def set_title_heading(self, title: str) -> None:
+        if not self._injected_title:
+            return
+        block = self.text_edit.document().firstBlock()
+        if block.blockFormat().headingLevel() != 1:
+            return
+        cursor = QTextCursor(block)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.EndOfBlock,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.insertText(title)
+
     def _clear_format(self) -> None:
         if self._source_mode:
             return
@@ -441,9 +734,14 @@ class MarkdownEditor(QWidget):
             cursor.setCharFormat(fmt)
         else:
             self.text_edit.setCurrentCharFormat(fmt)
-        block_format = QTextBlockFormat()
-        block_format.setHeadingLevel(0)
-        cursor.setBlockFormat(block_format)
+        for block in self._selected_blocks():
+            block_cursor = QTextCursor(block)
+            block_format = block.blockFormat()
+            block_format.setHeadingLevel(0)
+            block_format.clearProperty(QTextFormat.Property.BlockQuoteLevel)
+            block_format.clearProperty(QTextFormat.Property.BlockCodeLanguage)
+            block_format.setNonBreakableLines(False)
+            block_cursor.setBlockFormat(block_format)
         self.text_edit.setFocus()
 
     # ----------------------------------------------------------------- focus

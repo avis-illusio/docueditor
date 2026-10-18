@@ -461,6 +461,37 @@ class DocusaurusProject:
         write_text(path, text if text.endswith("\n") else text + "\n")
         return self._read_and_register(path)
 
+    def create_folder(self, name: str, parent_rel: str = "") -> DirEntry:
+        """Create a folder with ``_category_.json`` (label + same-level position)."""
+        if self.docs_dir is None:
+            raise ProjectError("项目尚未加载")
+        parent_rel = parent_rel.strip("/")
+        parent_path = self.docs_dir / parent_rel if parent_rel else self.docs_dir
+        resolved = parent_path.resolve()
+        if resolved != self.docs_dir and self.docs_dir not in resolved.parents:
+            raise ProjectError("目标目录不在 docs 目录内")
+        parent_path.mkdir(parents=True, exist_ok=True)
+        folder_name = slugify(name, fallback="folder")
+        folder_path = parent_path / folder_name
+        if folder_path.exists():
+            folder_path = unique_path(parent_path, folder_name, "")
+        folder_path.mkdir()
+        label = name.strip() or folder_name
+        data = {
+            "label": label,
+            "position": self.next_position(parent_rel),
+        }
+        write_text(
+            folder_path / "_category_.json",
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        )
+        self.scan()
+        rel = relative_posix(folder_path, self.docs_dir)
+        directory = self._find_dir(rel)
+        if directory is None:
+            raise ProjectError(f"创建目录失败：{rel}")
+        return directory
+
     def save_doc(
         self,
         entry: DocEntry,

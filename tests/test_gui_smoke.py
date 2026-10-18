@@ -53,6 +53,7 @@ def test_editor_roundtrip_preserves_mdx(qapp, tmp_path):
     assert "print('hi')" in output
     assert "<Tabs>" in output
     assert "import Tabs" in output
+    editor.deleteLater()
 
 
 def test_editor_source_mode_toggle(qapp, tmp_path):
@@ -67,6 +68,7 @@ def test_editor_source_mode_toggle(qapp, tmp_path):
     editor.set_source_mode(False)
     assert not editor.source_mode
     assert "Source edited" in editor.current_text()
+    editor.deleteLater()
 
 
 def test_main_window_loads_and_saves(qapp, project):
@@ -87,12 +89,13 @@ def test_main_window_create_document(qapp, project, monkeypatch):
     window = MainWindow()
     window._load_project(project)
     monkeypatch.setattr(
-        "docueditor.main_window.QInputDialog.getText",
-        staticmethod(lambda *args, **kwargs: ("新文档标题", True)),
+        "docueditor.main_window.NewDocumentDialog.ask",
+        staticmethod(lambda *args, **kwargs: ("new-doc", "新文档标题")),
     )
     window.new_document("")
     assert window.current_entry is not None
-    assert "新文档标题" in window.current_entry.rel
+    assert window.current_entry.rel == "new-doc.mdx"
+    assert window.current_entry.title == "新文档标题"
     window.deleteLater()
 
 
@@ -163,8 +166,8 @@ def test_new_child_document_turns_parent_into_folder(qapp, project, monkeypatch)
     parent = project.create_doc("parent", title="Parent")
     window._refresh_after_change()
     monkeypatch.setattr(
-        "docueditor.main_window.QInputDialog.getText",
-        staticmethod(lambda *args, **kwargs: ("Child", True)),
+        "docueditor.main_window.NewDocumentDialog.ask",
+        staticmethod(lambda *args, **kwargs: ("child", "Child")),
     )
     window.new_child_document(parent.rel)
     assert (project.docs_dir / "parent" / "index.mdx").is_file()
@@ -203,4 +206,85 @@ def test_input_method_menu_present(qapp, project):
     window._load_project(project)
     assert set(window.im_actions) == {"auto", "fcitx5", "ibus", "none"}
     assert window.im_status_action.text().startswith("当前：")
+    window.deleteLater()
+
+
+def test_editor_table_quote_code_roundtrip(qapp, tmp_path):
+    editor = MarkdownEditor()
+    path = tmp_path / "page.mdx"
+    text = (
+        "---\n"
+        "title: Page\n"
+        "---\n"
+        "\n"
+        "> 引用内容\n"
+        "\n"
+        "| 名称 | 值 |\n"
+        "| --- | --- |\n"
+        "| 甲 | 1 |\n"
+        "| 乙 | 2 |\n"
+        "\n"
+        "```python\n"
+        "print(1)\n"
+        "```\n"
+        "\n"
+        "- [ ] 任务\n"
+        "- [x] 完成\n"
+    )
+    editor.load_document(path, text)
+    output = editor.current_text()
+    assert "> 引用内容" in output
+    assert "| 名称 | 值 |" in output
+    assert "| --- | --- |" in output
+    assert "| 甲 | 1 |" in output
+    assert "```python" in output
+    assert "- [ ] 任务" in output
+    assert "- [x] 完成" in output
+    editor.deleteLater()
+
+
+def test_editor_injects_front_matter_title_as_h1(qapp, tmp_path):
+    editor = MarkdownEditor()
+    path = tmp_path / "page.mdx"
+    text = "---\ntitle: Hello\n---\n\nBody text\n"
+    editor.load_document(path, text)
+    block = editor.text_edit.document().firstBlock()
+    assert block.text() == "Hello"
+    assert block.blockFormat().headingLevel() == 1
+    output = editor.current_text()
+    assert output.count("# Hello") == 0
+    assert "title: Hello" in output
+    assert "Body text" in output
+    editor.deleteLater()
+
+
+def test_new_document_dialog_syncs_title_to_filename(qapp):
+    from docueditor.widgets.new_document_dialog import NewDocumentDialog
+
+    dialog = NewDocumentDialog(None, "guide")
+    dialog.filename_edit.setText("my-page")
+    assert dialog.title_edit.text() == "my page"
+    dialog.title_edit.setText("自定义标题")
+    dialog._title_edited("自定义标题")
+    dialog.filename_edit.setText("other-page")
+    assert dialog.title_edit.text() == "自定义标题"
+    assert dialog.values() == ("other-page", "自定义标题")
+    dialog.deleteLater()
+
+
+def test_create_folder(qapp, project, monkeypatch):
+    window = MainWindow()
+    window._load_project(project)
+    monkeypatch.setattr(
+        "docueditor.main_window.QInputDialog.getText",
+        staticmethod(lambda *args, **kwargs: ("指南", True)),
+    )
+    window.new_folder("")
+    folder = project.docs_dir / "指南"
+    assert folder.is_dir()
+    data = __import__("json").loads(
+        (folder / "_category_.json").read_text(encoding="utf-8")
+    )
+    assert data["label"] == "指南"
+    assert window.file_tree._find_item("指南") is not None
     window.deleteLater()
